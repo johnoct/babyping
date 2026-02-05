@@ -1,4 +1,6 @@
 import argparse
+import glob
+import os
 import subprocess
 import sys
 import time
@@ -21,6 +23,16 @@ def parse_args():
                         help="Motion sensitivity (default: medium)")
     parser.add_argument("--cooldown", type=int, default=30, help="Seconds between notifications (default: 30)")
     parser.add_argument("--no-preview", action="store_true", help="Run without preview window")
+    parser.add_argument("--snapshot-dir", default="~/.babyping/events",
+                        help="Directory for motion snapshots (default: ~/.babyping/events)")
+    parser.add_argument("--max-snapshots", type=int, default=100,
+                        help="Max snapshots to keep, 0=unlimited (default: 100)")
+    parser.add_argument("--no-snapshots", action="store_true",
+                        help="Disable snapshot saving")
+    parser.add_argument("--night-mode", action="store_true",
+                        help="Enhance preview brightness for dark rooms")
+    parser.add_argument("--roi", default=None,
+                        help="Region of interest as x,y,w,h (interactive selection if omitted)")
     return parser.parse_args()
 
 
@@ -40,6 +52,77 @@ def send_notification(title, message):
         "osascript", "-e",
         f'display notification "{message}" with title "{title}" sound name "Glass"'
     ], capture_output=True)
+
+
+def save_snapshot(frame, snapshot_dir="~/.babyping/events", max_snapshots=100):
+    """Save a frame as a JPEG snapshot. Returns the file path."""
+    snapshot_dir = os.path.expanduser(snapshot_dir)
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    filepath = os.path.join(snapshot_dir, f"{timestamp}.jpg")
+    success = cv2.imwrite(filepath, frame)
+    if not success:
+        return None
+
+    if max_snapshots > 0:
+        files = sorted(glob.glob(os.path.join(snapshot_dir, "*.jpg")))
+        while len(files) > max_snapshots:
+            try:
+                os.remove(files.pop(0))
+            except FileNotFoundError:
+                pass
+
+    return filepath
+
+
+def apply_night_mode(frame):
+    """Enhance frame brightness/contrast for dark rooms using CLAHE."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
+def crop_to_roi(frame, roi):
+    """Crop frame to ROI (x, y, w, h). Returns original frame if roi is None."""
+    if roi is None:
+        return frame
+    x, y, w, h = roi
+    return frame[y:y+h, x:x+w]
+
+
+def offset_contours(contours, roi):
+    """Offset contour coordinates back to full-frame position."""
+    if roi is None:
+        return contours
+    x, y, _, _ = roi
+    return [c + np.array([x, y]) for c in contours]
+
+
+def parse_roi_string(roi_str):
+    """Parse 'x,y,w,h' string into tuple. Returns None if input is None."""
+    if roi_str is None:
+        return None
+    parts = roi_str.split(",")
+    if len(parts) != 4:
+        raise ValueError(f"ROI must be x,y,w,h — got: {roi_str}")
+    return tuple(int(p) for p in parts)
+
+
+def select_roi(cap):
+    """Show first frame and let user draw ROI. Returns (x,y,w,h) or None if skipped."""
+    ret, frame = cap.read()
+    if not ret:
+        return None
+    print("Draw ROI and press ENTER, or press ENTER to skip.")
+    roi = cv2.selectROI("BabyPing — Select ROI", frame, fromCenter=False, showCrosshair=True)
+    cv2.destroyWindow("BabyPing — Select ROI")
+    if roi == (0, 0, 0, 0):
+        return None
+    return roi
 
 
 def open_camera(index):
@@ -63,6 +146,14 @@ def main():
     print(f"  Sensitivity:  {args.sensitivity} ({threshold}px² threshold)")
     print(f"  Cooldown:     {args.cooldown}s")
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
+    print(f"  Snapshots:    {'off' if args.no_snapshots else args.snapshot_dir} (max: {args.max_snapshots})")
+    print(f"  Night mode:   {'on' if args.night_mode else 'off'}")
+
+    roi = parse_roi_string(args.roi)
+    if roi is None and not args.no_preview:
+        roi = select_roi(cap)
+    if roi:
+        print(f"  ROI:          {roi}")
     print()
 
     prev_gray = None
@@ -91,22 +182,36 @@ def main():
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
             if prev_gray is not None:
-                motion, contours, area = detect_motion(prev_gray, gray, threshold)
+                prev_cropped = crop_to_roi(prev_gray, roi)
+                curr_cropped = crop_to_roi(gray, roi)
+                motion, contours, area = detect_motion(prev_cropped, curr_cropped, threshold)
 
                 if motion:
-                    cv2.drawContours(frame, contours, -1, (0, 0, 255), 2)
+                    full_contours = offset_contours(contours, roi)
+                    cv2.drawContours(frame, full_contours, -1, (0, 0, 255), 2)
 
                     now = time.time()
                     if now - last_alert_time >= args.cooldown:
                         timestamp = datetime.now().isoformat(timespec="seconds")
-                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²")
+                        snap_msg = ""
+                        display_frame = apply_night_mode(frame) if args.night_mode else frame
+                        if not args.no_snapshots:
+                            snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
+                            if snap_path:
+                                snap_msg = f" → {snap_path}"
+                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
                         send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
                         last_alert_time = now
 
             prev_gray = gray
 
+            if roi:
+                x, y, w, h = roi
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 1)
+
+            display_frame = apply_night_mode(frame) if args.night_mode else frame
             if not args.no_preview:
-                cv2.imshow("BabyPing", frame)
+                cv2.imshow("BabyPing", display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
