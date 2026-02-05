@@ -1,5 +1,8 @@
 import argparse
+import subprocess
 import sys
+import time
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -32,6 +35,13 @@ def detect_motion(prev_gray, curr_gray, threshold):
     return total_area >= threshold, contours, total_area
 
 
+def send_notification(title, message):
+    subprocess.run([
+        "osascript", "-e",
+        f'display notification "{message}" with title "{title}" sound name "Glass"'
+    ], capture_output=True)
+
+
 def open_camera(index):
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
@@ -51,6 +61,7 @@ def main():
     print("Camera opened. Press 'q' to quit.")
 
     prev_gray = None
+    last_alert_time = 0
 
     try:
         while True:
@@ -67,6 +78,13 @@ def main():
 
                 if motion:
                     cv2.drawContours(frame, contours, -1, (0, 0, 255), 2)
+
+                    now = time.time()
+                    if now - last_alert_time >= args.cooldown:
+                        timestamp = datetime.now().isoformat(timespec="seconds")
+                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²")
+                        send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
+                        last_alert_time = now
 
             prev_gray = gray
 
