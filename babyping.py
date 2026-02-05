@@ -118,8 +118,8 @@ def select_roi(cap):
     if not ret:
         return None
     print("Draw ROI and press ENTER, or press ENTER to skip.")
-    roi = cv2.selectROI("BabyPing — Select ROI", frame, fromCenter=False, showCrosshair=True)
-    cv2.destroyWindow("BabyPing — Select ROI")
+    roi = cv2.selectROI("BabyPing - Select ROI", frame, fromCenter=False, showCrosshair=True)
+    cv2.destroyWindow("BabyPing - Select ROI")
     if roi == (0, 0, 0, 0):
         return None
     return roi
