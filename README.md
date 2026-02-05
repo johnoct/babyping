@@ -33,6 +33,7 @@ python babyping.py
 | `--snapshots` | off | Enable snapshot saving on motion events |
 | `--night-mode` | off | Enhance preview brightness for dark rooms |
 | `--roi` | none | Region of interest as `x,y,w,h` |
+| `--port` | `8080` | Web UI port |
 
 ## Examples
 
@@ -55,6 +56,16 @@ python babyping.py --snapshot-dir ~/baby-snapshots
 # Set a fixed region of interest (skip interactive selection)
 python babyping.py --roi 100,80,400,300
 ```
+
+## Web UI
+
+When BabyPing starts, it also launches a web server. Open the printed URL from any device on the same Wi-Fi to view the live feed:
+
+```
+Web UI: http://192.168.1.x:8080
+```
+
+The web page shows the live camera stream, current status, and recent motion snapshots (when `--snapshots` is enabled).
 
 ## How It Works
 
