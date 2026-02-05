@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import apply_night_mode, crop_to_roi, detect_motion, offset_contours, parse_args, parse_roi_string, save_snapshot, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, save_snapshot, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -116,6 +116,16 @@ class TestParseArgs:
         monkeypatch.setattr(sys, "argv", ["babyping", "--roi", "100,80,400,300"])
         args = parse_args()
         assert args.roi == "100,80,400,300"
+
+    def test_port_default(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.port == 8080
+
+    def test_port_custom(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--port", "9000"])
+        args = parse_args()
+        assert args.port == 9000
 
 
 # --- SENSITIVITY_THRESHOLDS tests ---
@@ -241,3 +251,28 @@ class TestParseRoiString:
     def test_invalid_format_raises(self):
         with pytest.raises(ValueError):
             parse_roi_string("100,80")
+
+
+# --- FrameBuffer tests ---
+
+class TestFrameBuffer:
+    def test_initial_state_is_none(self):
+        buf = FrameBuffer()
+        assert buf.get() is None
+        assert buf.get_last_motion_time() is None
+
+    def test_update_and_get(self):
+        buf = FrameBuffer()
+        buf.update(b"fake-jpeg-data")
+        assert buf.get() == b"fake-jpeg-data"
+
+    def test_overwrites_previous(self):
+        buf = FrameBuffer()
+        buf.update(b"frame1")
+        buf.update(b"frame2")
+        assert buf.get() == b"frame2"
+
+    def test_last_motion_time(self):
+        buf = FrameBuffer()
+        buf.set_last_motion_time(12345.0)
+        assert buf.get_last_motion_time() == 12345.0
