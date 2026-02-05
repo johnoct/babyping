@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import apply_night_mode, detect_motion, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, offset_contours, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -187,3 +187,33 @@ class TestApplyNightMode:
         original = frame.copy()
         apply_night_mode(frame)
         np.testing.assert_array_equal(frame, original)
+
+
+# --- ROI tests ---
+
+class TestROI:
+    def test_crop_to_roi(self):
+        frame = np.zeros((240, 320), dtype=np.uint8)
+        frame[50:150, 100:250] = 255
+        roi = (100, 50, 150, 100)  # x, y, w, h
+        cropped = crop_to_roi(frame, roi)
+        assert cropped.shape == (100, 150)
+        assert cropped.mean() == 255
+
+    def test_crop_to_roi_none_returns_original(self):
+        frame = np.zeros((240, 320), dtype=np.uint8)
+        result = crop_to_roi(frame, None)
+        assert result is frame
+
+    def test_offset_contours(self):
+        # A single contour: a rectangle at (0,0)-(10,10) in cropped space
+        contour = np.array([[[0, 0]], [[10, 0]], [[10, 10]], [[0, 10]]], dtype=np.int32)
+        roi = (50, 30, 100, 100)  # x=50, y=30
+        result = offset_contours([contour], roi)
+        assert result[0][0][0][0] == 50  # x offset
+        assert result[0][0][0][1] == 30  # y offset
+
+    def test_offset_contours_none_roi_unchanged(self):
+        contour = np.array([[[5, 5]], [[15, 5]], [[15, 15]], [[5, 15]]], dtype=np.int32)
+        result = offset_contours([contour], None)
+        np.testing.assert_array_equal(result[0], contour)

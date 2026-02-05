@@ -84,6 +84,22 @@ def apply_night_mode(frame):
     return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
 
+def crop_to_roi(frame, roi):
+    """Crop frame to ROI (x, y, w, h). Returns original frame if roi is None."""
+    if roi is None:
+        return frame
+    x, y, w, h = roi
+    return frame[y:y+h, x:x+w]
+
+
+def offset_contours(contours, roi):
+    """Offset contour coordinates back to full-frame position."""
+    if roi is None:
+        return contours
+    x, y, _, _ = roi
+    return [c + np.array([x, y]) for c in contours]
+
+
 def open_camera(index):
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
