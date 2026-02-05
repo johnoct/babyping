@@ -92,6 +92,16 @@ class TestParseArgs:
         assert args.max_snapshots == 50
         assert args.no_snapshots is True
 
+    def test_night_mode_default_off(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.night_mode is False
+
+    def test_night_mode_enabled(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--night-mode"])
+        args = parse_args()
+        assert args.night_mode is True
+
     def test_invalid_sensitivity_rejected(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["babyping", "--sensitivity", "ultra"])
         with pytest.raises(SystemExit):

@@ -29,6 +29,8 @@ def parse_args():
                         help="Max snapshots to keep, 0=unlimited (default: 100)")
     parser.add_argument("--no-snapshots", action="store_true",
                         help="Disable snapshot saving")
+    parser.add_argument("--night-mode", action="store_true",
+                        help="Enhance preview brightness for dark rooms")
     return parser.parse_args()
 
 
@@ -104,6 +106,7 @@ def main():
     print(f"  Cooldown:     {args.cooldown}s")
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
     print(f"  Snapshots:    {'off' if args.no_snapshots else args.snapshot_dir} (max: {args.max_snapshots})")
+    print(f"  Night mode:   {'on' if args.night_mode else 'off'}")
     print()
 
     prev_gray = None
@@ -141,8 +144,9 @@ def main():
                     if now - last_alert_time >= args.cooldown:
                         timestamp = datetime.now().isoformat(timespec="seconds")
                         snap_msg = ""
+                        display_frame = apply_night_mode(frame) if args.night_mode else frame
                         if not args.no_snapshots:
-                            snap_path = save_snapshot(frame, args.snapshot_dir, args.max_snapshots)
+                            snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
                             if snap_path:
                                 snap_msg = f" → {snap_path}"
                         print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
@@ -151,8 +155,9 @@ def main():
 
             prev_gray = gray
 
+            display_frame = apply_night_mode(frame) if args.night_mode else frame
             if not args.no_preview:
-                cv2.imshow("BabyPing", frame)
+                cv2.imshow("BabyPing", display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
