@@ -47,6 +47,7 @@ class TestWebRoutes:
         assert data["night_mode"] is False
         assert data["snapshots_enabled"] is False
         assert "last_motion_time" in data
+        assert "last_frame_time" in data
 
     def test_snapshots_list_empty_dir(self, client):
         resp = client.get("/snapshots")

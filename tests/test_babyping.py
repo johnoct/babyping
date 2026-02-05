@@ -276,3 +276,13 @@ class TestFrameBuffer:
         buf = FrameBuffer()
         buf.set_last_motion_time(12345.0)
         assert buf.get_last_motion_time() == 12345.0
+
+    def test_last_frame_time_initially_none(self):
+        buf = FrameBuffer()
+        assert buf.get_last_frame_time() is None
+
+    def test_last_frame_time_set_on_update(self):
+        buf = FrameBuffer()
+        buf.update(b"frame")
+        assert buf.get_last_frame_time() is not None
+        assert buf.get_last_frame_time() > 0

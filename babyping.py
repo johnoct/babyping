@@ -17,10 +17,12 @@ class FrameBuffer:
         self._lock = threading.Lock()
         self._frame_bytes = None
         self._last_motion_time = None
+        self._last_frame_time = None
 
     def update(self, frame_bytes):
         with self._lock:
             self._frame_bytes = frame_bytes
+            self._last_frame_time = time.time()
 
     def get(self):
         with self._lock:
@@ -33,6 +35,10 @@ class FrameBuffer:
     def get_last_motion_time(self):
         with self._lock:
             return self._last_motion_time
+
+    def get_last_frame_time(self):
+        with self._lock:
+            return self._last_frame_time
 
 
 frame_buffer = FrameBuffer()
