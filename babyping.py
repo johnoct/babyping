@@ -2,6 +2,7 @@ import argparse
 import sys
 
 import cv2
+import numpy as np
 
 SENSITIVITY_THRESHOLDS = {
     "low": 5000,
@@ -18,6 +19,17 @@ def parse_args():
     parser.add_argument("--cooldown", type=int, default=30, help="Seconds between notifications (default: 30)")
     parser.add_argument("--no-preview", action="store_true", help="Run without preview window")
     return parser.parse_args()
+
+
+def detect_motion(prev_gray, curr_gray, threshold):
+    """Detect motion by frame-diffing. Returns (motion_detected, contours, total_area)."""
+    diff = cv2.absdiff(prev_gray, curr_gray)
+    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    thresh = cv2.dilate(thresh, None, iterations=2)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    total_area = sum(cv2.contourArea(c) for c in contours)
+    return total_area >= threshold, contours, total_area
 
 
 def open_camera(index):
@@ -38,12 +50,25 @@ def main():
     cap = open_camera(args.camera)
     print("Camera opened. Press 'q' to quit.")
 
+    prev_gray = None
+
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
                 print("Warning: Failed to read frame")
                 break
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+            if prev_gray is not None:
+                motion, contours, area = detect_motion(prev_gray, gray, threshold)
+
+                if motion:
+                    cv2.drawContours(frame, contours, -1, (0, 0, 255), 2)
+
+            prev_gray = gray
 
             if not args.no_preview:
                 cv2.imshow("BabyPing", frame)
