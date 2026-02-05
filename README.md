@@ -18,6 +18,13 @@ No cloud. No accounts. No app install. Just `python babyping.py` and open the UR
 ## Quick Start
 
 ```bash
+pip install .
+babyping
+```
+
+Or without installing:
+
+```bash
 pip install -r requirements.txt
 python babyping.py
 ```
@@ -112,11 +119,22 @@ On iPhone, tap Share > Add to Home Screen to run it as a full-screen app.
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/ -v
+pip install -e ".[dev]"
+pytest tests/ -v
 ```
 
 CI runs on pull requests via GitHub Actions.
+
+### Releasing
+
+Releases are tag-based. Push a version tag and GitHub Actions creates the release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow runs tests, extracts notes from `CHANGELOG.md`, and publishes a GitHub Release.
 
 ## Requirements
 

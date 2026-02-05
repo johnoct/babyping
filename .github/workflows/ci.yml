@@ -13,5 +13,5 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install opencv-python-headless numpy pytest flask
+      - run: pip install opencv-python-headless numpy flask pytest
       - run: pytest tests/ -v

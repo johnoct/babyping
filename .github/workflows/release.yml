@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install opencv-python-headless numpy flask pytest
+      - run: pytest tests/ -v
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          # Extract the section for this version from CHANGELOG.md
+          version="${{ steps.version.outputs.VERSION }}"
+          changelog=$(awk "/^## \[${version}\]/{found=1; next} /^## \[/{found=0} found{print}" CHANGELOG.md)
+          if [ -z "$changelog" ]; then
+            changelog="Release v${version}"
+          fi
+          # Write to file to avoid multiline env var issues
+          echo "$changelog" > /tmp/release_notes.md
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "BabyPing ${{ steps.version.outputs.VERSION }}" \
+            --notes-file /tmp/release_notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
