@@ -31,6 +31,8 @@ def parse_args():
                         help="Disable snapshot saving")
     parser.add_argument("--night-mode", action="store_true",
                         help="Enhance preview brightness for dark rooms")
+    parser.add_argument("--roi", default=None,
+                        help="Region of interest as x,y,w,h (interactive selection if omitted)")
     return parser.parse_args()
 
 
@@ -100,6 +102,29 @@ def offset_contours(contours, roi):
     return [c + np.array([x, y]) for c in contours]
 
 
+def parse_roi_string(roi_str):
+    """Parse 'x,y,w,h' string into tuple. Returns None if input is None."""
+    if roi_str is None:
+        return None
+    parts = roi_str.split(",")
+    if len(parts) != 4:
+        raise ValueError(f"ROI must be x,y,w,h — got: {roi_str}")
+    return tuple(int(p) for p in parts)
+
+
+def select_roi(cap):
+    """Show first frame and let user draw ROI. Returns (x,y,w,h) or None if skipped."""
+    ret, frame = cap.read()
+    if not ret:
+        return None
+    print("Draw ROI and press ENTER, or press ENTER to skip.")
+    roi = cv2.selectROI("BabyPing — Select ROI", frame, fromCenter=False, showCrosshair=True)
+    cv2.destroyWindow("BabyPing — Select ROI")
+    if roi == (0, 0, 0, 0):
+        return None
+    return roi
+
+
 def open_camera(index):
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
@@ -123,6 +148,12 @@ def main():
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
     print(f"  Snapshots:    {'off' if args.no_snapshots else args.snapshot_dir} (max: {args.max_snapshots})")
     print(f"  Night mode:   {'on' if args.night_mode else 'off'}")
+
+    roi = parse_roi_string(args.roi)
+    if roi is None and not args.no_preview:
+        roi = select_roi(cap)
+    if roi:
+        print(f"  ROI:          {roi}")
     print()
 
     prev_gray = None
@@ -151,10 +182,13 @@ def main():
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
             if prev_gray is not None:
-                motion, contours, area = detect_motion(prev_gray, gray, threshold)
+                prev_cropped = crop_to_roi(prev_gray, roi)
+                curr_cropped = crop_to_roi(gray, roi)
+                motion, contours, area = detect_motion(prev_cropped, curr_cropped, threshold)
 
                 if motion:
-                    cv2.drawContours(frame, contours, -1, (0, 0, 255), 2)
+                    full_contours = offset_contours(contours, roi)
+                    cv2.drawContours(frame, full_contours, -1, (0, 0, 255), 2)
 
                     now = time.time()
                     if now - last_alert_time >= args.cooldown:
@@ -170,6 +204,10 @@ def main():
                         last_alert_time = now
 
             prev_gray = gray
+
+            if roi:
+                x, y, w, h = roi
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 1)
 
             display_frame = apply_night_mode(frame) if args.night_mode else frame
             if not args.no_preview:

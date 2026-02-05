@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import apply_night_mode, crop_to_roi, detect_motion, offset_contours, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, offset_contours, parse_args, parse_roi_string, save_snapshot, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -106,6 +106,16 @@ class TestParseArgs:
         monkeypatch.setattr(sys, "argv", ["babyping", "--sensitivity", "ultra"])
         with pytest.raises(SystemExit):
             parse_args()
+
+    def test_roi_default_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.roi is None
+
+    def test_roi_custom_value(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--roi", "100,80,400,300"])
+        args = parse_args()
+        assert args.roi == "100,80,400,300"
 
 
 # --- SENSITIVITY_THRESHOLDS tests ---
@@ -217,3 +227,17 @@ class TestROI:
         contour = np.array([[[5, 5]], [[15, 5]], [[15, 15]], [[5, 15]]], dtype=np.int32)
         result = offset_contours([contour], None)
         np.testing.assert_array_equal(result[0], contour)
+
+
+# --- parse_roi_string tests ---
+
+class TestParseRoiString:
+    def test_valid_roi_string(self):
+        assert parse_roi_string("100,80,400,300") == (100, 80, 400, 300)
+
+    def test_none_returns_none(self):
+        assert parse_roi_string(None) is None
+
+    def test_invalid_format_raises(self):
+        with pytest.raises(ValueError):
+            parse_roi_string("100,80")
