@@ -1,4 +1,6 @@
 import argparse
+import glob
+import os
 import subprocess
 import sys
 import time
@@ -40,6 +42,28 @@ def send_notification(title, message):
         "osascript", "-e",
         f'display notification "{message}" with title "{title}" sound name "Glass"'
     ], capture_output=True)
+
+
+def save_snapshot(frame, snapshot_dir="~/.babyping/events", max_snapshots=100):
+    """Save a frame as a JPEG snapshot. Returns the file path."""
+    snapshot_dir = os.path.expanduser(snapshot_dir)
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    filepath = os.path.join(snapshot_dir, f"{timestamp}.jpg")
+    success = cv2.imwrite(filepath, frame)
+    if not success:
+        return None
+
+    if max_snapshots > 0:
+        files = sorted(glob.glob(os.path.join(snapshot_dir, "*.jpg")))
+        while len(files) > max_snapshots:
+            try:
+                os.remove(files.pop(0))
+            except FileNotFoundError:
+                pass
+
+    return filepath
 
 
 def open_camera(index):

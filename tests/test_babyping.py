@@ -1,11 +1,13 @@
+import glob
 import sys
 import os
 
+import cv2
 import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import detect_motion, parse_args, SENSITIVITY_THRESHOLDS
+from babyping import detect_motion, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -92,3 +94,47 @@ class TestSensitivityThresholds:
 
     def test_ordering(self):
         assert SENSITIVITY_THRESHOLDS["low"] > SENSITIVITY_THRESHOLDS["medium"] > SENSITIVITY_THRESHOLDS["high"]
+
+
+# --- save_snapshot tests ---
+
+class TestSaveSnapshot:
+    def test_saves_jpg_file(self, tmp_path):
+        frame = make_gray_frame(value=128)
+        path = save_snapshot(frame, snapshot_dir=str(tmp_path))
+        assert path is not None
+        assert path.endswith(".jpg")
+        assert os.path.exists(path)
+
+    def test_filename_format(self, tmp_path):
+        frame = make_gray_frame(value=128)
+        path = save_snapshot(frame, snapshot_dir=str(tmp_path))
+        filename = os.path.basename(path)
+        # Format: YYYY-MM-DDTHH-MM-SS.jpg
+        assert len(filename) == 23  # 19 chars + .jpg
+        assert filename[4] == "-"
+        assert filename[10] == "T"
+
+    def test_creates_directory_if_missing(self, tmp_path):
+        nested = str(tmp_path / "deep" / "nested")
+        frame = make_gray_frame(value=128)
+        path = save_snapshot(frame, snapshot_dir=nested)
+        assert os.path.exists(path)
+
+    def test_max_snapshots_enforced(self, tmp_path):
+        frame = make_gray_frame(value=128)
+        for i in range(5):
+            filepath = str(tmp_path / f"2026-01-0{i+1}T00-00-00.jpg")
+            cv2.imwrite(filepath, frame)
+        save_snapshot(frame, snapshot_dir=str(tmp_path), max_snapshots=3)
+        files = sorted(glob.glob(str(tmp_path / "*.jpg")))
+        assert len(files) == 3
+
+    def test_max_snapshots_zero_means_unlimited(self, tmp_path):
+        frame = make_gray_frame(value=128)
+        for i in range(5):
+            filepath = str(tmp_path / f"2026-01-0{i+1}T00-00-00.jpg")
+            cv2.imwrite(filepath, frame)
+        save_snapshot(frame, snapshot_dir=str(tmp_path), max_snapshots=0)
+        files = glob.glob(str(tmp_path / "*.jpg"))
+        assert len(files) == 6  # 5 existing + 1 new
