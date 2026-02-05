@@ -75,6 +75,23 @@ class TestParseArgs:
         assert args.cooldown == 10
         assert args.no_preview is True
 
+    def test_snapshot_defaults(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.snapshot_dir == "~/.babyping/events"
+        assert args.max_snapshots == 100
+        assert args.no_snapshots is False
+
+    def test_snapshot_custom_values(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "babyping", "--snapshot-dir", "/tmp/snaps",
+            "--max-snapshots", "50", "--no-snapshots",
+        ])
+        args = parse_args()
+        assert args.snapshot_dir == "/tmp/snaps"
+        assert args.max_snapshots == 50
+        assert args.no_snapshots is True
+
     def test_invalid_sensitivity_rejected(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["babyping", "--sensitivity", "ultra"])
         with pytest.raises(SystemExit):

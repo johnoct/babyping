@@ -23,6 +23,12 @@ def parse_args():
                         help="Motion sensitivity (default: medium)")
     parser.add_argument("--cooldown", type=int, default=30, help="Seconds between notifications (default: 30)")
     parser.add_argument("--no-preview", action="store_true", help="Run without preview window")
+    parser.add_argument("--snapshot-dir", default="~/.babyping/events",
+                        help="Directory for motion snapshots (default: ~/.babyping/events)")
+    parser.add_argument("--max-snapshots", type=int, default=100,
+                        help="Max snapshots to keep, 0=unlimited (default: 100)")
+    parser.add_argument("--no-snapshots", action="store_true",
+                        help="Disable snapshot saving")
     return parser.parse_args()
 
 
@@ -87,6 +93,7 @@ def main():
     print(f"  Sensitivity:  {args.sensitivity} ({threshold}px² threshold)")
     print(f"  Cooldown:     {args.cooldown}s")
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
+    print(f"  Snapshots:    {'off' if args.no_snapshots else args.snapshot_dir} (max: {args.max_snapshots})")
     print()
 
     prev_gray = None
@@ -123,7 +130,12 @@ def main():
                     now = time.time()
                     if now - last_alert_time >= args.cooldown:
                         timestamp = datetime.now().isoformat(timespec="seconds")
-                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²")
+                        snap_msg = ""
+                        if not args.no_snapshots:
+                            snap_path = save_snapshot(frame, args.snapshot_dir, args.max_snapshots)
+                            if snap_path:
+                                snap_msg = f" → {snap_path}"
+                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
                         send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
                         last_alert_time = now
 
