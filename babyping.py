@@ -59,6 +59,11 @@ def main():
 
     cap = open_camera(args.camera)
     print("Camera opened. Press 'q' to quit.")
+    print(f"  Camera index: {args.camera}")
+    print(f"  Sensitivity:  {args.sensitivity} ({threshold}px² threshold)")
+    print(f"  Cooldown:     {args.cooldown}s")
+    print(f"  Preview:      {'off' if args.no_preview else 'on'}")
+    print()
 
     prev_gray = None
     last_alert_time = 0
