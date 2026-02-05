@@ -201,7 +201,7 @@ def main():
     local_ip = get_local_ip()
     print(f"  Web UI:       http://{local_ip}:{args.port}")
 
-    flask_app = create_app(args)
+    flask_app = create_app(args, frame_buffer)
     web_thread = threading.Thread(
         target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
         daemon=True

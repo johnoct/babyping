@@ -5,6 +5,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from babyping import FrameBuffer
 from web import create_app
 
 
@@ -17,7 +18,7 @@ class FakeArgs:
 
 @pytest.fixture
 def client():
-    app = create_app(FakeArgs())
+    app = create_app(FakeArgs(), FrameBuffer())
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
@@ -69,7 +70,7 @@ class TestWebSnapshotsEnabled:
         # Create a test snapshot
         frame = np.full((100, 100, 3), 128, dtype=np.uint8)
         cv2.imwrite(str(tmp_path / "2026-02-05T12-00-00.jpg"), frame)
-        app = create_app(args)
+        app = create_app(args, FrameBuffer())
         app.config["TESTING"] = True
         with app.test_client() as c:
             yield c
