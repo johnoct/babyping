@@ -72,6 +72,16 @@ def save_snapshot(frame, snapshot_dir="~/.babyping/events", max_snapshots=100):
     return filepath
 
 
+def apply_night_mode(frame):
+    """Enhance frame brightness/contrast for dark rooms using CLAHE."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
 def open_camera(index):
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():

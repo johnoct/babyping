@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import detect_motion, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, detect_motion, parse_args, save_snapshot, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -155,3 +155,25 @@ class TestSaveSnapshot:
         save_snapshot(frame, snapshot_dir=str(tmp_path), max_snapshots=0)
         files = glob.glob(str(tmp_path / "*.jpg"))
         assert len(files) == 6  # 5 existing + 1 new
+
+
+# --- apply_night_mode tests ---
+
+class TestApplyNightMode:
+    def test_output_same_shape_as_input(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        result = apply_night_mode(frame)
+        assert result.shape == frame.shape
+        assert result.dtype == frame.dtype
+
+    def test_dark_frame_gets_brighter(self):
+        # Dark frame (value 20 across all channels)
+        frame = np.full((240, 320, 3), 20, dtype=np.uint8)
+        result = apply_night_mode(frame)
+        assert result.mean() > frame.mean()
+
+    def test_does_not_modify_input_frame(self):
+        frame = np.full((240, 320, 3), 50, dtype=np.uint8)
+        original = frame.copy()
+        apply_night_mode(frame)
+        np.testing.assert_array_equal(frame, original)
