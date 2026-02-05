@@ -62,13 +62,25 @@ def main():
 
     prev_gray = None
     last_alert_time = 0
+    consecutive_failures = 0
+    max_retries = 3
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("Warning: Failed to read frame")
-                break
+                consecutive_failures += 1
+                print(f"Warning: Failed to read frame ({consecutive_failures}/{max_retries})")
+                if consecutive_failures >= max_retries:
+                    print("Error: Camera disconnected. Attempting to reconnect...")
+                    cap.release()
+                    time.sleep(2)
+                    cap = open_camera(args.camera)
+                    consecutive_failures = 0
+                    prev_gray = None
+                    print("Reconnected.")
+                continue
+            consecutive_failures = 0
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
