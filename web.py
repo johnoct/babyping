@@ -5,7 +5,7 @@ import time
 from flask import Flask, Response, jsonify, send_from_directory
 
 
-def create_app(args):
+def create_app(args, frame_buffer=None):
     """Create Flask app for the BabyPing web UI."""
     app = Flask(__name__)
 
@@ -17,7 +17,6 @@ def create_app(args):
     @app.route("/stream")
     def stream():
         def generate():
-            from babyping import frame_buffer
             while True:
                 frame_bytes = frame_buffer.get()
                 if frame_bytes is not None:
@@ -29,7 +28,6 @@ def create_app(args):
 
     @app.route("/status")
     def status():
-        from babyping import frame_buffer
         last_motion = frame_buffer.get_last_motion_time()
         return jsonify({
             "sensitivity": args.sensitivity,
