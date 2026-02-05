@@ -4,6 +4,10 @@ A lightweight baby monitor that turns your Mac (or iPhone via Continuity Camera)
 
 No cloud. No accounts. No app install. Just `python babyping.py` and open the URL on your phone.
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="BabyPing Web UI" width="300">
+</p>
+
 ## Features
 
 - **Live video stream** via a local web page — check from your phone, tablet, or another computer
