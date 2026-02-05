@@ -1,13 +1,41 @@
 import argparse
 import glob
 import os
+import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 
 import cv2
 import numpy as np
+
+class FrameBuffer:
+    """Thread-safe buffer for sharing the latest frame between detection and web threads."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frame_bytes = None
+        self._last_motion_time = None
+
+    def update(self, frame_bytes):
+        with self._lock:
+            self._frame_bytes = frame_bytes
+
+    def get(self):
+        with self._lock:
+            return self._frame_bytes
+
+    def set_last_motion_time(self, t):
+        with self._lock:
+            self._last_motion_time = t
+
+    def get_last_motion_time(self):
+        with self._lock:
+            return self._last_motion_time
+
+
+frame_buffer = FrameBuffer()
 
 SENSITIVITY_THRESHOLDS = {
     "low": 5000,
@@ -33,6 +61,8 @@ def parse_args():
                         help="Enhance preview brightness for dark rooms")
     parser.add_argument("--roi", default=None,
                         help="Region of interest as x,y,w,h (interactive selection if omitted)")
+    parser.add_argument("--port", type=int, default=8080,
+                        help="Web UI port (default: 8080)")
     return parser.parse_args()
 
 
@@ -112,6 +142,18 @@ def parse_roi_string(roi_str):
     return tuple(int(p) for p in parts)
 
 
+def get_local_ip():
+    """Get the local network IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def select_roi(cap):
     """Show first frame and let user draw ROI. Returns (x,y,w,h) or None if skipped."""
     ret, frame = cap.read()
@@ -154,6 +196,17 @@ def main():
         roi = select_roi(cap)
     if roi:
         print(f"  ROI:          {roi}")
+
+    from web import create_app
+    local_ip = get_local_ip()
+    print(f"  Web UI:       http://{local_ip}:{args.port}")
+
+    flask_app = create_app(args)
+    web_thread = threading.Thread(
+        target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
+        daemon=True
+    )
+    web_thread.start()
     print()
 
     prev_gray = None
@@ -202,6 +255,7 @@ def main():
                         print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
                         send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
                         last_alert_time = now
+                        frame_buffer.set_last_motion_time(now)
 
             prev_gray = gray
 
@@ -210,6 +264,8 @@ def main():
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 1)
 
             display_frame = apply_night_mode(frame) if args.night_mode else frame
+            _, jpeg = cv2.imencode('.jpg', display_frame)
+            frame_buffer.update(jpeg.tobytes())
             if not args.no_preview:
                 cv2.imshow("BabyPing", display_frame)
 
