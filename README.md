@@ -57,6 +57,17 @@ python babyping.py --no-preview
 - **iPhone disconnects:** Make sure it's plugged in and not locked
 - **No notifications:** Check macOS notification settings for "Script Editor"
 
+## Development
+
+Install dev dependencies and run tests:
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+CI runs automatically on pull requests to `main` via GitHub Actions.
+
 ## Requirements
 
 - macOS 13+ (Ventura) for Continuity Camera
