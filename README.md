@@ -123,7 +123,7 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-CI runs on pull requests via GitHub Actions (Python 3.9, 3.11, 3.12).
+CI runs on pull requests via GitHub Actions.
 
 ### Releasing
 
