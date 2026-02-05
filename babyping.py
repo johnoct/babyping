@@ -27,8 +27,8 @@ def parse_args():
                         help="Directory for motion snapshots (default: ~/.babyping/events)")
     parser.add_argument("--max-snapshots", type=int, default=100,
                         help="Max snapshots to keep, 0=unlimited (default: 100)")
-    parser.add_argument("--no-snapshots", action="store_true",
-                        help="Disable snapshot saving")
+    parser.add_argument("--snapshots", action="store_true",
+                        help="Enable snapshot saving on motion events")
     parser.add_argument("--night-mode", action="store_true",
                         help="Enhance preview brightness for dark rooms")
     parser.add_argument("--roi", default=None,
@@ -146,7 +146,7 @@ def main():
     print(f"  Sensitivity:  {args.sensitivity} ({threshold}px² threshold)")
     print(f"  Cooldown:     {args.cooldown}s")
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
-    print(f"  Snapshots:    {'off' if args.no_snapshots else args.snapshot_dir} (max: {args.max_snapshots})")
+    print(f"  Snapshots:    {args.snapshot_dir + ' (max: ' + str(args.max_snapshots) + ')' if args.snapshots else 'off'}")
     print(f"  Night mode:   {'on' if args.night_mode else 'off'}")
 
     roi = parse_roi_string(args.roi)
@@ -195,7 +195,7 @@ def main():
                         timestamp = datetime.now().isoformat(timespec="seconds")
                         snap_msg = ""
                         display_frame = apply_night_mode(frame) if args.night_mode else frame
-                        if not args.no_snapshots:
+                        if args.snapshots:
                             snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
                             if snap_path:
                                 snap_msg = f" → {snap_path}"
