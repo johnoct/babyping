@@ -28,6 +28,11 @@ python babyping.py
 | `--sensitivity` | `medium` | `low` / `medium` / `high` |
 | `--cooldown` | `30` | Seconds between notifications |
 | `--no-preview` | off | Run without preview window |
+| `--snapshot-dir` | `~/.babyping/events` | Directory for motion snapshots |
+| `--max-snapshots` | `100` | Max snapshots to keep (0 = unlimited) |
+| `--no-snapshots` | off | Disable snapshot saving |
+| `--night-mode` | off | Enhance preview brightness for dark rooms |
+| `--roi` | none | Region of interest as `x,y,w,h` |
 
 ## Examples
 
@@ -40,6 +45,15 @@ python babyping.py --cooldown 5
 
 # Headless mode (no preview window)
 python babyping.py --no-preview
+
+# Night mode for dark rooms
+python babyping.py --night-mode
+
+# Save snapshots to a custom folder
+python babyping.py --snapshot-dir ~/baby-snapshots
+
+# Set a fixed region of interest (skip interactive selection)
+python babyping.py --roi 100,80,400,300
 ```
 
 ## How It Works
@@ -53,7 +67,7 @@ python babyping.py --no-preview
 ## Troubleshooting
 
 - **Camera not found:** Try different `--camera` values (0, 1, 2...)
-- **Too many false alerts:** Lower sensitivity with `--sensitivity low` or increase `--cooldown`
+- **Too many false alerts:** Lower sensitivity with `--sensitivity low`, increase `--cooldown`, or use `--roi` to limit detection zone
 - **iPhone disconnects:** Make sure it's plugged in and not locked
 - **No notifications:** Check macOS notification settings for "Script Editor"
 
