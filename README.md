@@ -30,7 +30,7 @@ python babyping.py
 | `--no-preview` | off | Run without preview window |
 | `--snapshot-dir` | `~/.babyping/events` | Directory for motion snapshots |
 | `--max-snapshots` | `100` | Max snapshots to keep (0 = unlimited) |
-| `--no-snapshots` | off | Disable snapshot saving |
+| `--snapshots` | off | Enable snapshot saving on motion events |
 | `--night-mode` | off | Enhance preview brightness for dark rooms |
 | `--roi` | none | Region of interest as `x,y,w,h` |
 
