@@ -6,8 +6,10 @@ import cv2
 import numpy as np
 import pytest
 
+import time
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, save_snapshot, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, save_snapshot, throttle_fps, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -286,3 +288,50 @@ class TestFrameBuffer:
         buf.update(b"frame")
         assert buf.get_last_frame_time() is not None
         assert buf.get_last_frame_time() > 0
+
+
+# --- parse_args --fps tests ---
+
+class TestParseArgsFps:
+    def test_fps_default_is_10(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.fps == 10
+
+    def test_fps_custom_value(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--fps", "5"])
+        args = parse_args()
+        assert args.fps == 5
+
+
+# --- throttle_fps tests ---
+
+class TestThrottleFps:
+    def test_sleeps_to_maintain_target_fps(self):
+        """If frame processed instantly, should sleep ~1/fps seconds."""
+        target_fps = 10
+        frame_start = time.monotonic()
+        # Simulate instant processing (frame_start is now)
+        throttle_fps(frame_start, target_fps)
+        elapsed = time.monotonic() - frame_start
+        # Should have waited roughly 0.1s (1/10 fps)
+        assert elapsed >= 0.08  # allow small tolerance
+
+    def test_no_sleep_when_processing_exceeds_budget(self):
+        """If processing took longer than frame budget, should not sleep."""
+        target_fps = 10
+        # Simulate frame_start 200ms ago — already over budget
+        frame_start = time.monotonic() - 0.2
+        before = time.monotonic()
+        throttle_fps(frame_start, target_fps)
+        after = time.monotonic()
+        # Should return almost immediately (< 10ms)
+        assert (after - before) < 0.01
+
+    def test_fps_zero_means_no_throttle(self):
+        """fps=0 should disable throttling entirely."""
+        frame_start = time.monotonic()
+        before = time.monotonic()
+        throttle_fps(frame_start, 0)
+        after = time.monotonic()
+        assert (after - before) < 0.01

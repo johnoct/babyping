@@ -69,6 +69,8 @@ def parse_args():
                         help="Region of interest as x,y,w,h (interactive selection if omitted)")
     parser.add_argument("--port", type=int, default=8080,
                         help="Web UI port (default: 8080)")
+    parser.add_argument("--fps", type=int, default=10,
+                        help="Max frames per second, 0=unlimited (default: 10)")
     return parser.parse_args()
 
 
@@ -148,6 +150,17 @@ def parse_roi_string(roi_str):
     return tuple(int(p) for p in parts)
 
 
+def throttle_fps(frame_start, target_fps):
+    """Sleep to maintain target frame rate. No-op if target_fps is 0."""
+    if target_fps <= 0:
+        return
+    frame_budget = 1.0 / target_fps
+    elapsed = time.monotonic() - frame_start
+    remaining = frame_budget - elapsed
+    if remaining > 0:
+        time.sleep(remaining)
+
+
 def get_local_ip():
     """Get the local network IP address."""
     try:
@@ -222,6 +235,8 @@ def main():
 
     try:
         while True:
+            frame_start = time.monotonic()
+
             ret, frame = cap.read()
             if not ret:
                 consecutive_failures += 1
@@ -253,9 +268,9 @@ def main():
                     if now - last_alert_time >= args.cooldown:
                         timestamp = datetime.now().isoformat(timespec="seconds")
                         snap_msg = ""
-                        display_frame = apply_night_mode(frame) if args.night_mode else frame
                         if args.snapshots:
-                            snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
+                            snap_frame = apply_night_mode(frame) if args.night_mode else frame
+                            snap_path = save_snapshot(snap_frame, args.snapshot_dir, args.max_snapshots)
                             if snap_path:
                                 snap_msg = f" → {snap_path}"
                         print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
@@ -278,6 +293,8 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
+
+            throttle_fps(frame_start, args.fps)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
