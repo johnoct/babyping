@@ -12,11 +12,17 @@ No cloud. No accounts. No app install. Just `python babyping.py` and open the UR
 
 - **Live video stream** via a local web page — check from your phone, tablet, or another computer
 - **Motion detection** with adjustable sensitivity and cooldown between alerts
-- **macOS notifications** with sound when motion is detected
+- **Audio monitoring** — detects baby sounds with auto-calibrating threshold
+- **macOS notifications** with sound when motion or sound is detected
 - **Night mode** — enhances brightness for dark rooms using adaptive histogram equalization
-- **Region of interest** — limit detection to a specific area (interactive or CLI)
+- **Region of interest** — limit detection to a specific area (interactive, CLI, or from the web UI)
 - **Snapshot history** — optionally save JPEGs of motion events
+- **Event log** — scrollable history of motion and sound events in an iOS-style bottom sheet
+- **Web UI controls** — adjust sensitivity, FPS, and toggle motion/sound alerts live from the browser
 - **Feed health indicator** — the web UI shows Live / Delayed / Offline so you know the stream isn't frozen
+- **FPS throttle** — reduce CPU/energy usage by capping frame rate
+- **Tailscale support** — access BabyPing remotely with a green "Secure" indicator
+- **Camera auto-reconnect** — exponential backoff reconnection on disconnect
 - **Mobile-friendly** — add to your iPhone home screen for a full-screen app experience
 
 ## Quick Start
@@ -67,6 +73,11 @@ Requires macOS 13+ (Ventura) and iOS 16+.
 | `--snapshot-dir` | `~/.babyping/events` | Directory for snapshots |
 | `--max-snapshots` | `100` | Max snapshots to keep (0 = unlimited) |
 | `--port` | `8080` | Web UI port |
+| `--fps` | `10` | Max frames per second (0 = unlimited) |
+| `--no-audio` | off | Disable audio monitoring |
+| `--audio-device` | system default | Audio input device index |
+| `--audio-threshold` | auto | Audio threshold (0-1), omit for auto-calibration |
+| `--max-events` | `1000` | Max events to keep in log (0 = unlimited) |
 
 ## Examples
 
@@ -85,6 +96,12 @@ python babyping.py --roi 100,80,400,300
 
 # Custom port
 python babyping.py --port 9090
+
+# Lower FPS for less CPU usage
+python babyping.py --fps 5
+
+# Disable audio monitoring
+python babyping.py --no-audio
 ```
 
 ## Web UI
@@ -95,9 +112,13 @@ The interface shows:
 - Full-screen live MJPEG stream
 - **Live / Delayed / Offline** indicator tied to actual frame delivery
 - Clock with seconds so you can verify the feed isn't frozen
-- Motion status with time since last detection
-- Sensitivity and night mode indicators
-- Expandable recent snapshots gallery (when `--snapshots` is enabled)
+- Motion and sound status with time since last detection
+- Audio VU meter showing live microphone levels
+- Tappable controls to cycle sensitivity (Low/Medium/High) and FPS (5/10/15/30)
+- Toggles to enable/disable motion and sound alerts
+- ROI selection — draw a monitoring region directly on the stream
+- Events bottom sheet with filterable motion/sound history and snapshot thumbnails
+- Browser audio alerts (bell icon) with vibration on supported devices
 
 On iPhone, tap Share > Add to Home Screen to run it as a full-screen app.
 
