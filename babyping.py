@@ -25,6 +25,8 @@ class FrameBuffer:
         self._audio_enabled = False
         self._motion_alerts_enabled = True
         self._sound_alerts_enabled = True
+        self._sensitivity = "medium"
+        self._fps = 10
 
     def update(self, frame_bytes):
         with self._lock:
@@ -94,6 +96,22 @@ class FrameBuffer:
     def get_sound_alerts_enabled(self):
         with self._lock:
             return self._sound_alerts_enabled
+
+    def set_sensitivity(self, sensitivity):
+        with self._lock:
+            self._sensitivity = sensitivity
+
+    def get_sensitivity(self):
+        with self._lock:
+            return self._sensitivity
+
+    def set_fps(self, fps):
+        with self._lock:
+            self._fps = fps
+
+    def get_fps(self):
+        with self._lock:
+            return self._fps
 
 
 frame_buffer = FrameBuffer()
@@ -303,6 +321,8 @@ def open_camera(index):
 
 def main():
     args = parse_args()
+    frame_buffer.set_sensitivity(args.sensitivity)
+    frame_buffer.set_fps(args.fps)
     threshold = SENSITIVITY_THRESHOLDS[args.sensitivity]
     print(f"BabyPing starting — camera={args.camera}, sensitivity={args.sensitivity} ({threshold}px²), cooldown={args.cooldown}s")
 
@@ -389,6 +409,7 @@ def main():
             consecutive_failures = 0
 
             roi = frame_buffer.get_roi()
+            threshold = SENSITIVITY_THRESHOLDS[frame_buffer.get_sensitivity()]
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
@@ -457,7 +478,7 @@ def main():
             if key == ord("q"):
                 break
 
-            throttle_fps(frame_start, args.fps)
+            throttle_fps(frame_start, frame_buffer.get_fps())
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:

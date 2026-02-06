@@ -357,6 +357,28 @@ class TestFrameBuffer:
         buf.set_sound_alerts_enabled(True)
         assert buf.get_sound_alerts_enabled() is True
 
+    def test_sensitivity_default(self):
+        buf = FrameBuffer()
+        assert buf.get_sensitivity() == "medium"
+
+    def test_set_and_get_sensitivity(self):
+        buf = FrameBuffer()
+        buf.set_sensitivity("high")
+        assert buf.get_sensitivity() == "high"
+        buf.set_sensitivity("low")
+        assert buf.get_sensitivity() == "low"
+
+    def test_fps_default(self):
+        buf = FrameBuffer()
+        assert buf.get_fps() == 10
+
+    def test_set_and_get_fps(self):
+        buf = FrameBuffer()
+        buf.set_fps(30)
+        assert buf.get_fps() == 30
+        buf.set_fps(5)
+        assert buf.get_fps() == 5
+
 
 # --- parse_args audio flag tests ---
 
