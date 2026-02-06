@@ -9,7 +9,9 @@ import pytest
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, save_snapshot, throttle_fps, SENSITIVITY_THRESHOLDS
+from unittest.mock import MagicMock, patch
+
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -335,3 +337,72 @@ class TestThrottleFps:
         throttle_fps(frame_start, 0)
         after = time.monotonic()
         assert (after - before) < 0.01
+
+
+# --- try_open_camera tests ---
+
+class TestTryOpenCamera:
+    def test_returns_cap_when_camera_available(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = try_open_camera(0)
+        assert result is mock_cap
+
+    def test_returns_none_when_camera_unavailable(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = False
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = try_open_camera(0)
+        assert result is None
+
+    def test_tries_avfoundation_fallback(self):
+        mock_cap_fail = MagicMock()
+        mock_cap_fail.isOpened.return_value = False
+        mock_cap_ok = MagicMock()
+        mock_cap_ok.isOpened.return_value = True
+
+        with patch("babyping.cv2.VideoCapture", side_effect=[mock_cap_fail, mock_cap_ok]) as mock_vc:
+            result = try_open_camera(0)
+        assert result is mock_cap_ok
+        assert mock_vc.call_count == 2
+
+
+# --- reconnect_camera tests ---
+
+class TestReconnectCamera:
+    def test_returns_cap_on_first_try(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        with patch("babyping.try_open_camera", return_value=mock_cap):
+            result = reconnect_camera(0, max_attempts=3, base_delay=0.01)
+        assert result is mock_cap
+
+    def test_retries_with_backoff_then_succeeds(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        with patch("babyping.try_open_camera", side_effect=[None, None, mock_cap]) as mock_try:
+            result = reconnect_camera(0, max_attempts=5, base_delay=0.01)
+        assert result is mock_cap
+        assert mock_try.call_count == 3
+
+    def test_returns_none_after_max_attempts(self):
+        with patch("babyping.try_open_camera", return_value=None):
+            result = reconnect_camera(0, max_attempts=3, base_delay=0.01)
+        assert result is None
+
+    def test_backoff_increases_wait_time(self):
+        with patch("babyping.try_open_camera", return_value=None), \
+             patch("babyping.time.sleep") as mock_sleep:
+            reconnect_camera(0, max_attempts=4, base_delay=1.0)
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        # Exponential: 1, 2, 4, 8 (capped at 60)
+        assert delays == [1.0, 2.0, 4.0, 8.0]
+
+    def test_backoff_caps_at_60_seconds(self):
+        with patch("babyping.try_open_camera", return_value=None), \
+             patch("babyping.time.sleep") as mock_sleep:
+            reconnect_camera(0, max_attempts=8, base_delay=10.0)
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        # 10, 20, 40, 60, 60, 60, 60, 60
+        assert all(d <= 60 for d in delays)
