@@ -291,6 +291,21 @@ class TestFrameBuffer:
         assert buf.get_last_frame_time() is not None
         assert buf.get_last_frame_time() > 0
 
+    def test_roi_initially_none(self):
+        buf = FrameBuffer()
+        assert buf.get_roi() is None
+
+    def test_set_and_get_roi(self):
+        buf = FrameBuffer()
+        buf.set_roi((10, 20, 100, 80))
+        assert buf.get_roi() == (10, 20, 100, 80)
+
+    def test_clear_roi(self):
+        buf = FrameBuffer()
+        buf.set_roi((10, 20, 100, 80))
+        buf.set_roi(None)
+        assert buf.get_roi() is None
+
 
 # --- parse_args --fps tests ---
 
