@@ -342,6 +342,58 @@ class TestWebEventsSheet:
         assert b"translateY(100%)" in resp.data
 
 
+class TestWebAlertToggles:
+    @pytest.fixture
+    def alert_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, buf
+
+    def test_status_includes_alert_flags(self, alert_client):
+        client, _ = alert_client
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert data["motion_alerts"] is True
+        assert data["sound_alerts"] is True
+
+    def test_toggle_motion_alerts_off(self, alert_client):
+        client, buf = alert_client
+        resp = client.post("/alerts", json={"motion": False})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["motion_alerts"] is False
+        assert buf.get_motion_alerts_enabled() is False
+
+    def test_toggle_sound_alerts_off(self, alert_client):
+        client, buf = alert_client
+        resp = client.post("/alerts", json={"sound": False})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["sound_alerts"] is False
+        assert buf.get_sound_alerts_enabled() is False
+
+    def test_toggle_both_alerts(self, alert_client):
+        client, buf = alert_client
+        resp = client.post("/alerts", json={"motion": False, "sound": False})
+        data = json.loads(resp.data)
+        assert data["motion_alerts"] is False
+        assert data["sound_alerts"] is False
+        resp = client.post("/alerts", json={"motion": True, "sound": True})
+        data = json.loads(resp.data)
+        assert data["motion_alerts"] is True
+        assert data["sound_alerts"] is True
+
+    def test_index_includes_alert_toggles(self, alert_client):
+        client, _ = alert_client
+        resp = client.get("/")
+        assert b"motion-alert-toggle" in resp.data
+        assert b"sound-alert-toggle" in resp.data
+        assert b"toggleMotionAlerts" in resp.data
+        assert b"toggleSoundAlerts" in resp.data
+
+
 class TestWebTailscale:
     @pytest.fixture
     def ts_client(self):

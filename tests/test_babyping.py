@@ -335,6 +335,28 @@ class TestFrameBuffer:
         buf.set_audio_enabled(False)
         assert buf.get_audio_enabled() is False
 
+    def test_motion_alerts_enabled_by_default(self):
+        buf = FrameBuffer()
+        assert buf.get_motion_alerts_enabled() is True
+
+    def test_set_and_get_motion_alerts_enabled(self):
+        buf = FrameBuffer()
+        buf.set_motion_alerts_enabled(False)
+        assert buf.get_motion_alerts_enabled() is False
+        buf.set_motion_alerts_enabled(True)
+        assert buf.get_motion_alerts_enabled() is True
+
+    def test_sound_alerts_enabled_by_default(self):
+        buf = FrameBuffer()
+        assert buf.get_sound_alerts_enabled() is True
+
+    def test_set_and_get_sound_alerts_enabled(self):
+        buf = FrameBuffer()
+        buf.set_sound_alerts_enabled(False)
+        assert buf.get_sound_alerts_enabled() is False
+        buf.set_sound_alerts_enabled(True)
+        assert buf.get_sound_alerts_enabled() is True
+
 
 # --- parse_args audio flag tests ---
 

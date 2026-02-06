@@ -23,6 +23,8 @@ class FrameBuffer:
         self._audio_level = 0.0
         self._last_sound_time = None
         self._audio_enabled = False
+        self._motion_alerts_enabled = True
+        self._sound_alerts_enabled = True
 
     def update(self, frame_bytes):
         with self._lock:
@@ -76,6 +78,22 @@ class FrameBuffer:
     def get_audio_enabled(self):
         with self._lock:
             return self._audio_enabled
+
+    def set_motion_alerts_enabled(self, enabled):
+        with self._lock:
+            self._motion_alerts_enabled = enabled
+
+    def get_motion_alerts_enabled(self):
+        with self._lock:
+            return self._motion_alerts_enabled
+
+    def set_sound_alerts_enabled(self, enabled):
+        with self._lock:
+            self._sound_alerts_enabled = enabled
+
+    def get_sound_alerts_enabled(self):
+        with self._lock:
+            return self._sound_alerts_enabled
 
 
 frame_buffer = FrameBuffer()
@@ -404,7 +422,8 @@ def main():
                         if snap_path:
                             snap_msg = f" → {snap_path}"
                     print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
-                    send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
+                    if frame_buffer.get_motion_alerts_enabled():
+                        send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
                     last_alert_time = now
                     frame_buffer.set_last_motion_time(now)
 
@@ -423,7 +442,8 @@ def main():
                         last_sound_alert_time = sound_time
                         timestamp = datetime.now().isoformat(timespec="seconds")
                         print(f"[{timestamp}] Sound detected")
-                        send_notification("BabyPing", "Sound detected")
+                        if frame_buffer.get_sound_alerts_enabled():
+                            send_notification("BabyPing", "Sound detected")
                         event_log.log_event("sound")
                         if args.max_events > 0:
                             event_log.prune(max_events=args.max_events)

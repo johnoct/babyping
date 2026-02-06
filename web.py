@@ -46,6 +46,8 @@ def create_app(args, frame_buffer=None, event_log=None):
             "audio_level": frame_buffer.get_audio_level(),
             "last_sound_time": frame_buffer.get_last_sound_time(),
             "audio_enabled": frame_buffer.get_audio_enabled(),
+            "motion_alerts": frame_buffer.get_motion_alerts_enabled(),
+            "sound_alerts": frame_buffer.get_sound_alerts_enabled(),
         })
 
     @app.route("/roi", methods=["POST"])
@@ -79,6 +81,18 @@ def create_app(args, frame_buffer=None, event_log=None):
     def snapshot_file(filename):
         snapshot_dir = os.path.expanduser(args.snapshot_dir)
         return send_from_directory(snapshot_dir, filename)
+
+    @app.route("/alerts", methods=["POST"])
+    def set_alerts():
+        data = request.get_json(force=True, silent=True) or {}
+        if "motion" in data:
+            frame_buffer.set_motion_alerts_enabled(bool(data["motion"]))
+        if "sound" in data:
+            frame_buffer.set_sound_alerts_enabled(bool(data["sound"]))
+        return jsonify({
+            "motion_alerts": frame_buffer.get_motion_alerts_enabled(),
+            "sound_alerts": frame_buffer.get_sound_alerts_enabled(),
+        })
 
     @app.route("/events")
     def events():
@@ -392,6 +406,19 @@ html, body {
 }
 
 .night-icon { font-size: 14px; line-height: 1; }
+
+/* ── Alert toggles ── */
+.alert-toggle {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.alert-toggle.off {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  opacity: 0.5;
+}
 
 /* ── Audio VU meter ── */
 .audio-card {
@@ -829,6 +856,12 @@ html, body {
         <div class="status-card tag" id="night-card" style="display:none">
           <span class="night-icon">&#9790;</span>
         </div>
+        <div class="status-card tag alert-toggle" id="motion-alert-toggle" onclick="toggleMotionAlerts()">
+          <span id="motion-alert-label">Motion</span>
+        </div>
+        <div class="status-card tag alert-toggle" id="sound-alert-toggle" onclick="toggleSoundAlerts()" style="display:none">
+          <span id="sound-alert-label">Sound</span>
+        </div>
         <div class="status-card tag roi-btn" id="roi-btn" onclick="enterRoiMode()">
           <span class="roi-label">ROI</span>
         </div>
@@ -890,9 +923,32 @@ const securePill = document.getElementById('secure-pill');
 const audioCard = document.getElementById('audio-card');
 const audioLabel = document.getElementById('audio-label');
 const vuFill = document.getElementById('vu-fill');
+const motionAlertToggle = document.getElementById('motion-alert-toggle');
+const soundAlertToggle = document.getElementById('sound-alert-toggle');
 
 /* ROI state (initialized early for status polling) */
 var currentRoi = null;
+
+/* Alert toggle state */
+var motionAlertsEnabled = true;
+var soundAlertsEnabled = true;
+
+function updateAlertToggles() {
+  motionAlertToggle.classList.toggle('off', !motionAlertsEnabled);
+  soundAlertToggle.classList.toggle('off', !soundAlertsEnabled);
+}
+
+function toggleMotionAlerts() {
+  motionAlertsEnabled = !motionAlertsEnabled;
+  updateAlertToggles();
+  fetch('/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motion: motionAlertsEnabled }) });
+}
+
+function toggleSoundAlerts() {
+  soundAlertsEnabled = !soundAlertsEnabled;
+  updateAlertToggles();
+  fetch('/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sound: soundAlertsEnabled }) });
+}
 
 /* Audio alert state (initialized early for status polling) */
 var audioCtx = null;
@@ -1053,6 +1109,13 @@ function updateStatus() {
     } else {
       audioCard.classList.remove('visible');
     }
+
+    /* Sync alert toggle state */
+    motionAlertsEnabled = data.motion_alerts;
+    soundAlertsEnabled = data.sound_alerts;
+    updateAlertToggles();
+    if (data.audio_enabled) { soundAlertToggle.style.display = ''; }
+    else { soundAlertToggle.style.display = 'none'; }
 
     /* Audio alert on new motion or sound events */
     if (!statusInitialized) {
