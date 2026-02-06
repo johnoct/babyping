@@ -352,7 +352,7 @@ html, body {
   transition: background 0.4s, border-color 0.4s;
 }
 
-.status-card.primary { flex: 1; }
+.status-card.primary { flex: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 .status-card.motion-on {
   background: rgba(240,198,116,0.07);
@@ -482,7 +482,7 @@ html, body {
   border-top: 1px solid var(--glass-border);
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
-  transform: translateY(var(--sheet-y));
+  transform: translateY(100%);
   transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
   display: flex;
   flex-direction: column;
@@ -511,7 +511,7 @@ html, body {
   margin: 10px auto 8px;
 }
 
-.sheet-peek {
+.sheet-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -817,7 +817,7 @@ html, body {
 
     <div class="status-bar">
       <div class="status-row">
-        <div class="status-card primary" id="motion-card">
+        <div class="status-card primary" id="motion-card" onclick="toggleSheet()">
           <div class="status-dot"></div>
           <span class="status-text" id="motion-text">No motion</span>
         </div>
@@ -854,7 +854,7 @@ html, body {
 <div class="sheet" id="sheet">
   <div class="sheet-handle" id="sheet-handle">
     <div class="sheet-pill"></div>
-    <div class="sheet-peek">
+    <div class="sheet-header">
       <span class="sheet-title">Events</span>
       <span class="sheet-count" id="sheet-count">0</span>
     </div>
@@ -1098,10 +1098,11 @@ var sheetCount = document.getElementById('sheet-count');
 var sheetFilters = document.getElementById('sheet-filters');
 
 var sheetHeight = sheet.offsetHeight;
-var SNAP_PEEK = sheetHeight - 60;
+var SNAP_HIDDEN = sheetHeight;
 var SNAP_HALF = sheetHeight * 0.5;
 var SNAP_FULL = 0;
-var sheetY = SNAP_PEEK;
+var sheetY = SNAP_HIDDEN;
+var sheetOpen = false;
 var sheetFilter = 'all';
 var sheetDragging = false;
 var sheetStartY = 0;
@@ -1112,28 +1113,36 @@ var sheetVelocity = 0;
 
 function setSheetY(y) {
   sheetY = y;
-  sheet.style.setProperty('--sheet-y', y + 'px');
-  /* Interpolate backdrop: 0 at peek, 0.5 at full */
-  var range = SNAP_PEEK - SNAP_FULL;
+  sheet.style.transform = 'translateY(' + y + 'px)';
+  /* Interpolate backdrop: 0 at hidden, 0.5 at full */
+  var range = SNAP_HIDDEN - SNAP_FULL;
   var progress = range > 0 ? 1 - ((y - SNAP_FULL) / range) : 0;
   progress = Math.max(0, Math.min(1, progress));
   var opacity = progress * 0.5;
   sheetBackdrop.style.background = 'rgba(0,0,0,' + opacity + ')';
   if (progress > 0.02) { sheetBackdrop.classList.add('visible'); }
   else { sheetBackdrop.classList.remove('visible'); }
+  sheetOpen = y < SNAP_HIDDEN;
 }
-
-/* Initialise to peek */
-setSheetY(SNAP_PEEK);
 
 function snapSheet(target) {
   sheet.classList.remove('dragging');
   setSheetY(target);
+  if (target >= SNAP_HIDDEN) { loadSheetEvents(); }
+}
+
+function toggleSheet() {
+  if (sheetOpen) {
+    snapSheet(SNAP_HIDDEN);
+  } else {
+    loadSheetEvents();
+    snapSheet(SNAP_HALF);
+  }
 }
 
 function recalcSnaps() {
   sheetHeight = sheet.offsetHeight;
-  SNAP_PEEK = sheetHeight - 60;
+  SNAP_HIDDEN = sheetHeight;
   SNAP_HALF = sheetHeight * 0.5;
   SNAP_FULL = 0;
 }
@@ -1158,12 +1167,12 @@ function onSheetPointerMove(e) {
   var deltaY = clientY - sheetStartY;
   var newY = sheetStartTranslate + deltaY;
 
-  /* Rubber band past bounds */
+  /* Rubber band past top */
   if (newY < SNAP_FULL) {
     newY = SNAP_FULL + (newY - SNAP_FULL) * 0.3;
-  } else if (newY > SNAP_PEEK) {
-    newY = SNAP_PEEK + (newY - SNAP_PEEK) * 0.3;
   }
+  /* Clamp at hidden */
+  if (newY > SNAP_HIDDEN) { newY = SNAP_HIDDEN; }
 
   setSheetY(newY);
 
@@ -1185,10 +1194,10 @@ function onSheetPointerUp() {
 
   /* Fast swipe detection */
   if (sheetVelocity < -800) { snapSheet(SNAP_FULL); return; }
-  if (sheetVelocity > 800) { snapSheet(SNAP_PEEK); return; }
+  if (sheetVelocity > 800) { snapSheet(SNAP_HIDDEN); return; }
 
   /* Snap to nearest */
-  var snaps = [SNAP_FULL, SNAP_HALF, SNAP_PEEK];
+  var snaps = [SNAP_FULL, SNAP_HALF, SNAP_HIDDEN];
   var closest = snaps[0];
   var minDist = Math.abs(sheetY - snaps[0]);
   for (var i = 1; i < snaps.length; i++) {
@@ -1200,7 +1209,6 @@ function onSheetPointerUp() {
 
 /* Touch events on sheet */
 sheet.addEventListener('touchstart', function(e) {
-  /* Let sheet-body scroll naturally when at full and content scrolled */
   if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
   onSheetPointerDown(e);
 }, { passive: false });
@@ -1222,31 +1230,24 @@ document.addEventListener('mousemove', function(e) {
 document.addEventListener('mouseup', onSheetPointerUp);
 
 /* Backdrop tap to dismiss */
-sheetBackdrop.addEventListener('click', function() { snapSheet(SNAP_PEEK); });
+sheetBackdrop.addEventListener('click', function() { snapSheet(SNAP_HIDDEN); });
 
 /* Recalculate on resize */
 window.addEventListener('resize', function() {
   recalcSnaps();
-  snapSheet(SNAP_PEEK);
+  if (sheetOpen) { snapSheet(SNAP_HALF); }
 });
 
 /* Handle sheet-body scroll: only drag sheet when scrolled to top and swiping down */
 sheetBody.addEventListener('touchstart', function(e) {
-  if (sheetY > SNAP_HALF) return; /* Not expanded, let sheet handle it */
-  if (sheetBody.scrollTop <= 0) {
-    /* At top of scroll, let the sheet handle dragging */
-    return;
-  }
-  /* Content is scrolled, stop propagation so sheet body scrolls normally */
+  if (sheetY > SNAP_HALF) return;
+  if (sheetBody.scrollTop <= 0) { return; }
   e.stopPropagation();
 }, { passive: true });
 
 sheetBody.addEventListener('touchmove', function(e) {
   if (sheetDragging) return;
-  /* When at top and pulling down, prevent default scroll and start sheet drag */
-  if (sheetBody.scrollTop <= 0 && sheetY <= SNAP_HALF) {
-    return; /* handled by sheet listener */
-  }
+  if (sheetBody.scrollTop <= 0 && sheetY <= SNAP_HALF) { return; }
   e.stopPropagation();
 }, { passive: true });
 

@@ -330,6 +330,17 @@ class TestWebEventsSheet:
         resp = client.get("/timeline")
         assert resp.status_code == 404
 
+    def test_motion_card_opens_sheet(self, client):
+        """Motion card should have onclick to toggle the events sheet."""
+        resp = client.get("/")
+        assert b"toggleSheet" in resp.data
+        assert b'onclick="toggleSheet()"' in resp.data
+
+    def test_sheet_starts_hidden(self, client):
+        """Sheet should start fully hidden (translateY 100%)."""
+        resp = client.get("/")
+        assert b"translateY(100%)" in resp.data
+
 
 class TestWebTailscale:
     @pytest.fixture
