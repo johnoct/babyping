@@ -394,6 +394,58 @@ class TestWebAlertToggles:
         assert b"toggleSoundAlerts" in resp.data
 
 
+class TestWebSettings:
+    @pytest.fixture
+    def settings_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, buf
+
+    def test_status_includes_fps(self, settings_client):
+        client, _ = settings_client
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert "fps" in data
+        assert data["fps"] == 10
+
+    def test_set_sensitivity(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"sensitivity": "high"})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["sensitivity"] == "high"
+        assert buf.get_sensitivity() == "high"
+
+    def test_set_fps(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"fps": 30})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["fps"] == 30
+        assert buf.get_fps() == 30
+
+    def test_set_invalid_sensitivity_ignored(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"sensitivity": "ultra"})
+        data = json.loads(resp.data)
+        assert data["sensitivity"] == "medium"
+
+    def test_set_invalid_fps_ignored(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"fps": 60})
+        data = json.loads(resp.data)
+        assert data["fps"] == 10
+
+    def test_index_includes_settings_controls(self, settings_client):
+        client, _ = settings_client
+        resp = client.get("/")
+        assert b"cycleSensitivity" in resp.data
+        assert b"cycleFps" in resp.data
+        assert b"fps-card" in resp.data
+
+
 class TestWebTailscale:
     @pytest.fixture
     def ts_client(self):

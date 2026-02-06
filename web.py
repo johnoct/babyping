@@ -17,16 +17,14 @@ def create_app(args, frame_buffer=None, event_log=None):
 
     @app.route("/stream")
     def stream():
-        target_fps = args.fps if args.fps > 0 else 30
-        stream_interval = 1.0 / target_fps
-
         def generate():
             while True:
                 frame_bytes = frame_buffer.get()
                 if frame_bytes is not None:
                     yield (b"--frame\r\n"
                            b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                time.sleep(stream_interval)
+                fps = frame_buffer.get_fps()
+                time.sleep(1.0 / (fps if fps > 0 else 30))
 
         return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -36,7 +34,8 @@ def create_app(args, frame_buffer=None, event_log=None):
         last_frame = frame_buffer.get_last_frame_time()
         roi = frame_buffer.get_roi()
         return jsonify({
-            "sensitivity": args.sensitivity,
+            "sensitivity": frame_buffer.get_sensitivity(),
+            "fps": frame_buffer.get_fps(),
             "night_mode": args.night_mode,
             "snapshots_enabled": args.snapshots,
             "last_motion_time": last_motion,
@@ -92,6 +91,20 @@ def create_app(args, frame_buffer=None, event_log=None):
         return jsonify({
             "motion_alerts": frame_buffer.get_motion_alerts_enabled(),
             "sound_alerts": frame_buffer.get_sound_alerts_enabled(),
+        })
+
+    @app.route("/settings", methods=["POST"])
+    def set_settings():
+        data = request.get_json(force=True, silent=True) or {}
+        if "sensitivity" in data and data["sensitivity"] in ("low", "medium", "high"):
+            frame_buffer.set_sensitivity(data["sensitivity"])
+        if "fps" in data:
+            fps_val = int(data["fps"])
+            if fps_val in (5, 10, 15, 30):
+                frame_buffer.set_fps(fps_val)
+        return jsonify({
+            "sensitivity": frame_buffer.get_sensitivity(),
+            "fps": frame_buffer.get_fps(),
         })
 
     @app.route("/events")
@@ -852,7 +865,8 @@ html, body {
           <span class="audio-label" id="audio-label">Audio</span>
           <div class="vu-track"><div class="vu-fill" id="vu-fill"></div></div>
         </div>
-        <div class="status-card tag" id="sens-card"></div>
+        <div class="status-card tag alert-toggle" id="sens-card" onclick="cycleSensitivity()"></div>
+        <div class="status-card tag alert-toggle" id="fps-card" onclick="cycleFps()"></div>
         <div class="status-card tag" id="night-card" style="display:none">
           <span class="night-icon">&#9790;</span>
         </div>
@@ -911,6 +925,7 @@ const streamWrap = document.getElementById('stream-wrap');
 const motionCard = document.getElementById('motion-card');
 const motionText = document.getElementById('motion-text');
 const sensCard = document.getElementById('sens-card');
+const fpsCard = document.getElementById('fps-card');
 const nightCard = document.getElementById('night-card');
 const clockEl = document.getElementById('clock');
 const loadingEl = document.getElementById('loading');
@@ -948,6 +963,26 @@ function toggleSoundAlerts() {
   soundAlertsEnabled = !soundAlertsEnabled;
   updateAlertToggles();
   fetch('/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sound: soundAlertsEnabled }) });
+}
+
+/* Settings cycle */
+var SENS_ORDER = ['low', 'medium', 'high'];
+var FPS_ORDER = [5, 10, 15, 30];
+var currentSensitivity = 'medium';
+var currentFps = 10;
+
+function cycleSensitivity() {
+  var idx = (SENS_ORDER.indexOf(currentSensitivity) + 1) % SENS_ORDER.length;
+  currentSensitivity = SENS_ORDER[idx];
+  sensCard.textContent = currentSensitivity.charAt(0).toUpperCase() + currentSensitivity.slice(1);
+  fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sensitivity: currentSensitivity }) });
+}
+
+function cycleFps() {
+  var idx = (FPS_ORDER.indexOf(currentFps) + 1) % FPS_ORDER.length;
+  currentFps = FPS_ORDER[idx];
+  fpsCard.textContent = currentFps + ' FPS';
+  fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fps: currentFps }) });
 }
 
 /* Audio alert state (initialized early for status polling) */
@@ -1025,7 +1060,10 @@ let lastMotionActive = false;
 
 function updateStatus() {
   fetch('/status').then(function(r) { return r.json(); }).then(function(data) {
+    currentSensitivity = data.sensitivity;
     sensCard.textContent = data.sensitivity.charAt(0).toUpperCase() + data.sensitivity.slice(1);
+    currentFps = data.fps;
+    fpsCard.textContent = data.fps + ' FPS';
 
     if (data.night_mode) { nightCard.style.display = ''; }
     else { nightCard.style.display = 'none'; }
