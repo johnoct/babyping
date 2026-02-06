@@ -186,11 +186,32 @@ def select_roi(cap):
     return roi
 
 
-def open_camera(index):
+def try_open_camera(index):
+    """Try to open a camera. Returns the VideoCapture or None if unavailable."""
     cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-    if not cap.isOpened():
+    if cap.isOpened():
+        return cap
+    cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
+    if cap.isOpened():
+        return cap
+    return None
+
+
+def reconnect_camera(index, max_attempts=10, base_delay=2.0):
+    """Retry opening camera with exponential backoff. Returns cap or None."""
+    for attempt in range(max_attempts):
+        delay = min(base_delay * (2 ** attempt), 60)
+        print(f"  Reconnect attempt {attempt + 1}/{max_attempts} (waiting {delay:.0f}s)...")
+        time.sleep(delay)
+        cap = try_open_camera(index)
+        if cap is not None:
+            return cap
+    return None
+
+
+def open_camera(index):
+    cap = try_open_camera(index)
+    if cap is None:
         print(f"Error: Could not open camera at index {index}")
         sys.exit(1)
     return cap
@@ -231,7 +252,7 @@ def main():
     prev_gray = None
     last_alert_time = 0
     consecutive_failures = 0
-    max_retries = 3
+    max_frame_failures = 30
 
     try:
         while True:
@@ -240,15 +261,21 @@ def main():
             ret, frame = cap.read()
             if not ret:
                 consecutive_failures += 1
-                print(f"Warning: Failed to read frame ({consecutive_failures}/{max_retries})")
-                if consecutive_failures >= max_retries:
-                    print("Error: Camera disconnected. Attempting to reconnect...")
+                if consecutive_failures == 1:
+                    print("Warning: Dropped frame — camera may be intermittent")
+                if consecutive_failures >= max_frame_failures:
+                    print(f"Camera lost after {consecutive_failures} dropped frames. Reconnecting...")
+                    send_notification("BabyPing", "Camera disconnected — reconnecting...")
                     cap.release()
-                    time.sleep(2)
-                    cap = open_camera(args.camera)
+                    cap = reconnect_camera(args.camera)
+                    if cap is None:
+                        print("Error: Could not reconnect to camera. Exiting.")
+                        send_notification("BabyPing", "Camera reconnect failed — stopping")
+                        break
                     consecutive_failures = 0
                     prev_gray = None
-                    print("Reconnected.")
+                    print("Reconnected to camera.")
+                    send_notification("BabyPing", "Camera reconnected")
                 continue
             consecutive_failures = 0
 
