@@ -358,6 +358,32 @@ html, body {
 
 .night-icon { font-size: 14px; line-height: 1; }
 
+/* ── Audio alert button ── */
+.notify-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.3s, border-color 0.3s, background 0.3s;
+}
+
+.notify-btn.active {
+  color: var(--amber);
+  border-color: rgba(240,198,116,0.3);
+  background: var(--amber-soft);
+}
+
+.notify-btn svg { width: 14px; height: 14px; }
+
 /* ── Snapshots panel ── */
 .snap-panel {
   flex-shrink: 0;
@@ -580,6 +606,9 @@ html, body {
     <header class="header">
       <div class="logo">BabyPing</div>
       <div class="header-right">
+        <button class="notify-btn" id="notify-btn" onclick="toggleAudio()">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        </button>
         <span class="clock" id="clock"></span>
         <div class="live-pill">
           <span class="live-dot"></span>
@@ -655,6 +684,59 @@ const streamImg = streamWrap.querySelector('img');
 /* ROI state (initialized early for status polling) */
 var currentRoi = null;
 
+/* Audio alert state (initialized early for status polling) */
+var audioCtx = null;
+var audioEnabled = false;
+var lastMotionAlerted = 0;
+var statusInitialized = false;
+var notifyBtn = document.getElementById('notify-btn');
+
+try { audioEnabled = localStorage.getItem('bp_audio') === '1'; } catch(e) {}
+
+function updateNotifyBtn() {
+  if (audioEnabled) { notifyBtn.classList.add('active'); }
+  else { notifyBtn.classList.remove('active'); }
+}
+updateNotifyBtn();
+
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume(); }
+}
+
+function playAlertSound() {
+  if (!audioCtx) return;
+  try {
+    var now = audioCtx.currentTime;
+    var o1 = audioCtx.createOscillator();
+    var g1 = audioCtx.createGain();
+    o1.connect(g1); g1.connect(audioCtx.destination);
+    o1.frequency.value = 523;
+    g1.gain.setValueAtTime(0.2, now);
+    g1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    o1.start(now); o1.stop(now + 0.3);
+    var o2 = audioCtx.createOscillator();
+    var g2 = audioCtx.createGain();
+    o2.connect(g2); g2.connect(audioCtx.destination);
+    o2.frequency.value = 659;
+    g2.gain.setValueAtTime(0.2, now + 0.15);
+    g2.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+    o2.start(now + 0.15); o2.stop(now + 0.45);
+  } catch(e) {}
+}
+
+function toggleAudio() {
+  audioEnabled = !audioEnabled;
+  try { localStorage.setItem('bp_audio', audioEnabled ? '1' : '0'); } catch(e) {}
+  updateNotifyBtn();
+  if (audioEnabled) {
+    ensureAudio();
+    playAlertSound();
+  }
+}
+
 /* Clock */
 function updateClock() {
   const d = new Date();
@@ -721,6 +803,17 @@ function updateStatus() {
       motionCard.classList.remove('motion-on');
       streamWrap.classList.remove('has-motion');
       motionText.textContent = 'No motion';
+    }
+
+    /* Audio alert on new motion events */
+    if (!statusInitialized) {
+      lastMotionAlerted = data.last_motion_time || 0;
+      statusInitialized = true;
+    } else if (audioEnabled && data.last_motion_time && data.last_motion_time > lastMotionAlerted) {
+      lastMotionAlerted = data.last_motion_time;
+      ensureAudio();
+      playAlertSound();
+      try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
     }
   }).catch(function() {});
 }
