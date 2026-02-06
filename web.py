@@ -16,13 +16,16 @@ def create_app(args, frame_buffer=None):
 
     @app.route("/stream")
     def stream():
+        target_fps = args.fps if args.fps > 0 else 30
+        stream_interval = 1.0 / target_fps
+
         def generate():
             while True:
                 frame_bytes = frame_buffer.get()
                 if frame_bytes is not None:
                     yield (b"--frame\r\n"
                            b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                time.sleep(0.033)  # ~30fps
+                time.sleep(stream_interval)
 
         return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -84,9 +87,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#080810">
 <title>BabyPing</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@500;700&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -113,7 +113,7 @@ html, body {
   height: 100%;
   background: var(--bg-deep);
   color: var(--text);
-  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
@@ -229,7 +229,7 @@ html, body {
 }
 
 .logo {
-  font-family: 'Comfortaa', cursive;
+  font-family: 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, sans-serif;
   font-weight: 700;
   font-size: 21px;
   color: var(--text);
