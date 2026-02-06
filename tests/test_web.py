@@ -48,6 +48,7 @@ class TestWebRoutes:
         assert data["snapshots_enabled"] is False
         assert "last_motion_time" in data
         assert "last_frame_time" in data
+        assert data["roi"] is None
 
     def test_snapshots_list_empty_dir(self, client):
         resp = client.get("/snapshots")
@@ -90,3 +91,59 @@ class TestWebSnapshotsEnabled:
     def test_index_snapshots_enabled(self, snap_client):
         resp = snap_client.get("/")
         assert b"true" in resp.data  # SNAPSHOTS_ENABLED = true
+
+
+class TestWebROI:
+    @pytest.fixture
+    def roi_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, buf
+
+    def test_set_roi(self, roi_client):
+        client, buf = roi_client
+        resp = client.post("/roi", json={"x": 10, "y": 20, "w": 100, "h": 80})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["roi"] == {"x": 10, "y": 20, "w": 100, "h": 80}
+        assert buf.get_roi() == (10, 20, 100, 80)
+
+    def test_clear_roi(self, roi_client):
+        client, buf = roi_client
+        buf.set_roi((10, 20, 100, 80))
+        resp = client.post("/roi", data="null", content_type="application/json")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["roi"] is None
+        assert buf.get_roi() is None
+
+    def test_roi_invalid_missing_fields(self, roi_client):
+        client, _ = roi_client
+        resp = client.post("/roi", json={"x": 10})
+        assert resp.status_code == 400
+
+    def test_roi_invalid_negative_dimensions(self, roi_client):
+        client, _ = roi_client
+        resp = client.post("/roi", json={"x": 10, "y": 20, "w": -5, "h": 80})
+        assert resp.status_code == 400
+
+    def test_roi_invalid_zero_width(self, roi_client):
+        client, _ = roi_client
+        resp = client.post("/roi", json={"x": 10, "y": 20, "w": 0, "h": 80})
+        assert resp.status_code == 400
+
+    def test_status_includes_roi(self, roi_client):
+        client, buf = roi_client
+        buf.set_roi((50, 60, 200, 150))
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert data["roi"] == {"x": 50, "y": 60, "w": 200, "h": 150}
+
+    def test_index_includes_roi_ui(self, roi_client):
+        client, _ = roi_client
+        resp = client.get("/")
+        assert b"roi-btn" in resp.data
+        assert b"roi-overlay" in resp.data
+        assert b"roi-canvas" in resp.data

@@ -2,7 +2,7 @@ import glob
 import os
 import time
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 
 def create_app(args, frame_buffer=None):
@@ -30,13 +30,34 @@ def create_app(args, frame_buffer=None):
     def status():
         last_motion = frame_buffer.get_last_motion_time()
         last_frame = frame_buffer.get_last_frame_time()
+        roi = frame_buffer.get_roi()
         return jsonify({
             "sensitivity": args.sensitivity,
             "night_mode": args.night_mode,
             "snapshots_enabled": args.snapshots,
             "last_motion_time": last_motion,
             "last_frame_time": last_frame,
+            "roi": {"x": roi[0], "y": roi[1], "w": roi[2], "h": roi[3]} if roi else None,
         })
+
+    @app.route("/roi", methods=["POST"])
+    def set_roi():
+        data = request.get_json(force=True, silent=True)
+        if data is None:
+            frame_buffer.set_roi(None)
+            return jsonify({"roi": None})
+        try:
+            x = int(data["x"])
+            y = int(data["y"])
+            w = int(data["w"])
+            h = int(data["h"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "ROI must include x, y, w, h as integers"}), 400
+        if x < 0 or y < 0 or w <= 0 or h <= 0:
+            return jsonify({"error": "Invalid ROI dimensions"}), 400
+        roi = (x, y, w, h)
+        frame_buffer.set_roi(roi)
+        return jsonify({"roi": {"x": x, "y": y, "w": w, "h": h}})
 
     @app.route("/snapshots")
     def snapshots_list():
@@ -421,6 +442,83 @@ html, body {
   color: var(--text-muted);
 }
 
+/* ── ROI selection ── */
+.roi-btn { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.roi-btn.has-roi { border-color: rgba(240,198,116,0.25); background: var(--amber-soft); }
+.roi-btn.has-roi .roi-label { color: var(--amber); }
+
+.roi-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+
+.roi-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+}
+
+.roi-overlay.active { display: flex; }
+
+.roi-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.roi-hint {
+  position: absolute;
+  top: calc(50px + var(--sat));
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 21;
+}
+
+.roi-actions {
+  position: absolute;
+  bottom: calc(70px + var(--sab));
+  left: 0; right: 0;
+  display: none;
+  justify-content: center;
+  gap: 10px;
+  z-index: 21;
+}
+
+.roi-actions.visible { display: flex; }
+
+.roi-action-btn {
+  padding: 8px 20px;
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.roi-action-btn.confirm {
+  background: rgba(163,190,140,0.15);
+  border-color: rgba(163,190,140,0.3);
+  color: var(--green);
+}
+
+.roi-action-btn.clear {
+  background: rgba(191,97,106,0.1);
+  border-color: rgba(191,97,106,0.2);
+  color: #bf616a;
+}
+
 /* ── Fullscreen image viewer ── */
 .viewer {
   position: fixed;
@@ -500,6 +598,19 @@ html, body {
         <div class="status-card tag" id="night-card" style="display:none">
           <span class="night-icon">&#9790;</span>
         </div>
+        <div class="status-card tag roi-btn" id="roi-btn" onclick="enterRoiMode()">
+          <span class="roi-label">ROI</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="roi-overlay" id="roi-overlay">
+      <canvas class="roi-canvas" id="roi-canvas"></canvas>
+      <div class="roi-hint" id="roi-hint">Draw a region to monitor</div>
+      <div class="roi-actions" id="roi-actions">
+        <button class="roi-action-btn confirm" onclick="confirmRoi()">Confirm</button>
+        <button class="roi-action-btn" onclick="cancelRoi()">Cancel</button>
+        <button class="roi-action-btn clear" id="roi-clear-btn" onclick="clearRoi()" style="display:none">Clear</button>
       </div>
     </div>
   </div>
@@ -541,6 +652,9 @@ const livePill = document.querySelector('.live-pill');
 const liveLabel = document.getElementById('live-label');
 const streamImg = streamWrap.querySelector('img');
 
+/* ROI state (initialized early for status polling) */
+var currentRoi = null;
+
 /* Clock */
 function updateClock() {
   const d = new Date();
@@ -581,6 +695,10 @@ function updateStatus() {
         liveLabel.textContent = 'Live';
       }
     }
+
+    /* ROI sync */
+    currentRoi = data.roi;
+    updateRoiBtn();
 
     /* Motion status */
     if (data.last_motion_time) {
@@ -642,6 +760,180 @@ updateStatus();
 updateSnapshots();
 setInterval(updateStatus, 3000);
 setInterval(updateSnapshots, 10000);
+
+/* ── ROI selection ── */
+const roiOverlay = document.getElementById('roi-overlay');
+const roiCanvas = document.getElementById('roi-canvas');
+const roiActions = document.getElementById('roi-actions');
+const roiHint = document.getElementById('roi-hint');
+const roiBtn = document.getElementById('roi-btn');
+const roiClearBtn = document.getElementById('roi-clear-btn');
+const roiCtx = roiCanvas.getContext('2d');
+var roiMode = false;
+var roiDrawing = false;
+var roiStartX = 0, roiStartY = 0, roiEndX = 0, roiEndY = 0;
+
+function getStreamMapping() {
+  var cw = streamImg.clientWidth, ch = streamImg.clientHeight;
+  var nw = streamImg.naturalWidth, nh = streamImg.naturalHeight;
+  if (!nw || !nh) return null;
+  var scale, ox, oy;
+  if (nw / nh > cw / ch) {
+    scale = ch / nh; ox = (cw - nw * scale) / 2; oy = 0;
+  } else {
+    scale = cw / nw; ox = 0; oy = (ch - nh * scale) / 2;
+  }
+  return { scale: scale, ox: ox, oy: oy, nw: nw, nh: nh };
+}
+
+function cssToFrame(cx, cy) {
+  var m = getStreamMapping();
+  if (!m) return null;
+  var fx = Math.round((cx - m.ox) / m.scale);
+  var fy = Math.round((cy - m.oy) / m.scale);
+  return { x: Math.max(0, Math.min(fx, m.nw)), y: Math.max(0, Math.min(fy, m.nh)) };
+}
+
+function enterRoiMode() {
+  roiMode = true;
+  roiCanvas.width = streamImg.clientWidth;
+  roiCanvas.height = streamImg.clientHeight;
+  roiActions.classList.remove('visible');
+  roiHint.textContent = 'Draw a region to monitor';
+  roiClearBtn.style.display = currentRoi ? '' : 'none';
+  if (currentRoi) { roiActions.classList.add('visible'); }
+  roiCtx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+  drawDimOverlay();
+  roiOverlay.classList.add('active');
+}
+
+function drawDimOverlay() {
+  roiCtx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+  roiCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  roiCtx.fillRect(0, 0, roiCanvas.width, roiCanvas.height);
+}
+
+function drawRoiRect() {
+  var x = Math.min(roiStartX, roiEndX);
+  var y = Math.min(roiStartY, roiEndY);
+  var w = Math.abs(roiEndX - roiStartX);
+  var h = Math.abs(roiEndY - roiStartY);
+
+  drawDimOverlay();
+
+  /* Cut out the selected region */
+  roiCtx.clearRect(x, y, w, h);
+
+  /* Amber border */
+  roiCtx.strokeStyle = 'rgba(240, 198, 116, 0.85)';
+  roiCtx.lineWidth = 2;
+  roiCtx.strokeRect(x, y, w, h);
+
+  /* Corner markers */
+  roiCtx.fillStyle = 'rgba(240, 198, 116, 0.9)';
+  var cs = 8;
+  [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(function(p) {
+    roiCtx.fillRect(p[0] - cs/2, p[1] - cs/2, cs, cs);
+  });
+}
+
+function getPos(e) {
+  var rect = roiCanvas.getBoundingClientRect();
+  if (e.touches) {
+    return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+  }
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function onPointerDown(e) {
+  if (!roiMode) return;
+  e.preventDefault();
+  roiDrawing = true;
+  var p = getPos(e);
+  roiStartX = p.x; roiStartY = p.y;
+  roiEndX = p.x; roiEndY = p.y;
+  roiActions.classList.remove('visible');
+  roiHint.textContent = '';
+}
+
+function onPointerMove(e) {
+  if (!roiDrawing) return;
+  e.preventDefault();
+  var p = getPos(e);
+  roiEndX = p.x; roiEndY = p.y;
+  drawRoiRect();
+}
+
+function onPointerUp(e) {
+  if (!roiDrawing) return;
+  roiDrawing = false;
+  var w = Math.abs(roiEndX - roiStartX);
+  var h = Math.abs(roiEndY - roiStartY);
+  if (w < 15 || h < 15) {
+    drawDimOverlay();
+    roiHint.textContent = 'Draw a region to monitor';
+    return;
+  }
+  roiClearBtn.style.display = currentRoi ? '' : 'none';
+  roiActions.classList.add('visible');
+}
+
+roiCanvas.addEventListener('mousedown', onPointerDown);
+roiCanvas.addEventListener('mousemove', onPointerMove);
+roiCanvas.addEventListener('mouseup', onPointerUp);
+roiCanvas.addEventListener('touchstart', onPointerDown, { passive: false });
+roiCanvas.addEventListener('touchmove', onPointerMove, { passive: false });
+roiCanvas.addEventListener('touchend', onPointerUp);
+
+function confirmRoi() {
+  var x = Math.min(roiStartX, roiEndX);
+  var y = Math.min(roiStartY, roiEndY);
+  var w = Math.abs(roiEndX - roiStartX);
+  var h = Math.abs(roiEndY - roiStartY);
+  var tl = cssToFrame(x, y);
+  var br = cssToFrame(x + w, y + h);
+  if (!tl || !br) return;
+  var roi = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+  if (roi.w <= 0 || roi.h <= 0) return;
+  fetch('/roi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(roi)
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    currentRoi = data.roi;
+    updateRoiBtn();
+    exitRoiMode();
+  });
+}
+
+function clearRoi() {
+  fetch('/roi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: 'null'
+  }).then(function(r) { return r.json(); }).then(function() {
+    currentRoi = null;
+    updateRoiBtn();
+    exitRoiMode();
+  });
+}
+
+function cancelRoi() { exitRoiMode(); }
+
+function exitRoiMode() {
+  roiMode = false;
+  roiDrawing = false;
+  roiOverlay.classList.remove('active');
+  roiActions.classList.remove('visible');
+  roiCtx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+}
+
+function updateRoiBtn() {
+  if (currentRoi) { roiBtn.classList.add('has-roi'); }
+  else { roiBtn.classList.remove('has-roi'); }
+}
+
+window.addEventListener('resize', function() { if (roiMode) exitRoiMode(); });
 </script>
 </body>
 </html>"""

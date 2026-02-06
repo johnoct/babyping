@@ -18,6 +18,7 @@ class FrameBuffer:
         self._frame_bytes = None
         self._last_motion_time = None
         self._last_frame_time = None
+        self._roi = None
 
     def update(self, frame_bytes):
         with self._lock:
@@ -39,6 +40,14 @@ class FrameBuffer:
     def get_last_frame_time(self):
         with self._lock:
             return self._last_frame_time
+
+    def set_roi(self, roi):
+        with self._lock:
+            self._roi = roi
+
+    def get_roi(self):
+        with self._lock:
+            return self._roi
 
 
 frame_buffer = FrameBuffer()
@@ -234,6 +243,7 @@ def main():
     roi = parse_roi_string(args.roi)
     if roi is None and not args.no_preview:
         roi = select_roi(cap)
+    frame_buffer.set_roi(roi)
     if roi:
         print(f"  ROI:          {roi}")
 
@@ -278,6 +288,8 @@ def main():
                     send_notification("BabyPing", "Camera reconnected")
                 continue
             consecutive_failures = 0
+
+            roi = frame_buffer.get_roi()
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
