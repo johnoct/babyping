@@ -164,3 +164,217 @@ class TestWebAudioAlerts:
     def test_index_includes_vibration_api(self, client):
         resp = client.get("/")
         assert b"navigator.vibrate" in resp.data
+
+
+class TestWebAudioStatus:
+    @pytest.fixture
+    def audio_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, buf
+
+    def test_status_includes_audio_level(self, audio_client):
+        client, buf = audio_client
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert "audio_level" in data
+        assert data["audio_level"] == 0.0
+
+    def test_status_audio_level_updates(self, audio_client):
+        client, buf = audio_client
+        buf.set_audio_level(0.75)
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert data["audio_level"] == 0.75
+
+    def test_status_includes_last_sound_time(self, audio_client):
+        client, buf = audio_client
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert "last_sound_time" in data
+        assert data["last_sound_time"] is None
+
+    def test_status_last_sound_time_updates(self, audio_client):
+        client, buf = audio_client
+        buf.set_last_sound_time(12345.0)
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert data["last_sound_time"] == 12345.0
+
+    def test_status_includes_audio_enabled(self, audio_client):
+        client, buf = audio_client
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert "audio_enabled" in data
+        assert data["audio_enabled"] is False
+
+    def test_status_audio_enabled_updates(self, audio_client):
+        client, buf = audio_client
+        buf.set_audio_enabled(True)
+        resp = client.get("/status")
+        data = json.loads(resp.data)
+        assert data["audio_enabled"] is True
+
+
+class TestWebAudioVuMeter:
+    def test_index_includes_audio_card(self, client):
+        resp = client.get("/")
+        assert b"audio-card" in resp.data
+
+    def test_index_includes_vu_fill(self, client):
+        resp = client.get("/")
+        assert b"vu-fill" in resp.data
+
+    def test_index_includes_vu_track(self, client):
+        resp = client.get("/")
+        assert b"vu-track" in resp.data
+
+    def test_index_includes_audio_label(self, client):
+        resp = client.get("/")
+        assert b"audio-label" in resp.data
+
+    def test_index_includes_sound_alert_js(self, client):
+        resp = client.get("/")
+        assert b"lastSoundAlerted" in resp.data
+        assert b"audio_level" in resp.data
+        assert b"audio_enabled" in resp.data
+
+
+class TestWebEvents:
+    @pytest.fixture
+    def events_client(self, tmp_path):
+        from events import EventLog
+        events_file = str(tmp_path / "events.jsonl")
+        event_log = EventLog(events_file)
+        args = FakeArgs()
+        app = create_app(args, FrameBuffer(), event_log=event_log)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, event_log
+
+    def test_events_endpoint_empty(self, events_client):
+        client, _ = events_client
+        resp = client.get("/events")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == []
+
+    def test_events_endpoint_returns_events(self, events_client):
+        client, event_log = events_client
+        event_log.log_event("motion", timestamp=1.0, area=500.0)
+        event_log.log_event("sound", timestamp=2.0, audio_level=0.8)
+        resp = client.get("/events")
+        data = json.loads(resp.data)
+        assert len(data) == 2
+        assert data[0]["timestamp"] == 2.0  # Newest first
+        assert data[1]["timestamp"] == 1.0
+
+    def test_events_endpoint_limit(self, events_client):
+        client, event_log = events_client
+        for i in range(10):
+            event_log.log_event("motion", timestamp=float(i), area=float(i))
+        resp = client.get("/events?limit=3")
+        data = json.loads(resp.data)
+        assert len(data) == 3
+
+    def test_events_endpoint_offset(self, events_client):
+        client, event_log = events_client
+        for i in range(10):
+            event_log.log_event("motion", timestamp=float(i), area=float(i))
+        resp = client.get("/events?limit=3&offset=2")
+        data = json.loads(resp.data)
+        assert len(data) == 3
+        assert data[0]["timestamp"] == 7.0
+
+    def test_events_endpoint_filter_type(self, events_client):
+        client, event_log = events_client
+        event_log.log_event("motion", timestamp=1.0, area=100.0)
+        event_log.log_event("sound", timestamp=2.0, audio_level=0.5)
+        resp = client.get("/events?type=motion")
+        data = json.loads(resp.data)
+        assert len(data) == 1
+        assert data[0]["type"] == "motion"
+
+    def test_events_endpoint_no_event_log(self):
+        """When no event_log is passed, /events returns empty list."""
+        app = create_app(FakeArgs(), FrameBuffer())
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            resp = c.get("/events")
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data == []
+
+
+class TestWebTimeline:
+    def test_timeline_returns_html(self, client):
+        resp = client.get("/timeline")
+        assert resp.status_code == 200
+        assert b"text/html" in resp.content_type.encode()
+
+    def test_timeline_has_babyping_title(self, client):
+        resp = client.get("/timeline")
+        assert b"BabyPing" in resp.data
+
+    def test_timeline_has_filter_buttons(self, client):
+        resp = client.get("/timeline")
+        assert b"filter-btn" in resp.data
+        assert b"All" in resp.data
+        assert b"Motion" in resp.data
+        assert b"Sound" in resp.data
+
+    def test_timeline_has_back_link(self, client):
+        resp = client.get("/timeline")
+        assert b'href="/"' in resp.data
+
+    def test_timeline_has_events_container(self, client):
+        resp = client.get("/timeline")
+        assert b"timeline-events" in resp.data
+
+    def test_timeline_fetches_events_api(self, client):
+        resp = client.get("/timeline")
+        assert b"/events" in resp.data
+
+    def test_main_page_has_timeline_button(self, client):
+        resp = client.get("/")
+        assert b"timeline-btn" in resp.data
+        assert b"/timeline" in resp.data
+
+
+class TestWebTailscale:
+    @pytest.fixture
+    def ts_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c
+
+    def test_status_includes_tailscale_ip_null(self, ts_client):
+        """When no Tailscale detected, tailscale_ip should be null."""
+        from unittest.mock import patch
+        with patch("web.get_tailscale_ip", return_value=None):
+            resp = ts_client.get("/status")
+            data = json.loads(resp.data)
+            assert "tailscale_ip" in data
+            assert data["tailscale_ip"] is None
+
+    def test_status_includes_tailscale_ip_value(self, ts_client):
+        """When Tailscale detected, tailscale_ip should be the IP."""
+        from unittest.mock import patch
+        with patch("web.get_tailscale_ip", return_value="100.85.42.17"):
+            resp = ts_client.get("/status")
+            data = json.loads(resp.data)
+            assert data["tailscale_ip"] == "100.85.42.17"
+
+    def test_index_includes_secure_pill_markup(self, ts_client):
+        """The HTML template should include the secure-pill element."""
+        resp = ts_client.get("/")
+        assert b"secure-pill" in resp.data
+
+    def test_secure_pill_hidden_by_default(self, ts_client):
+        """The secure pill should be hidden by default (display:none)."""
+        resp = ts_client.get("/")
+        assert b"secure-pill" in resp.data

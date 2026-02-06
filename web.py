@@ -4,8 +4,10 @@ import time
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from babyping import get_tailscale_ip
 
-def create_app(args, frame_buffer=None):
+
+def create_app(args, frame_buffer=None, event_log=None):
     """Create Flask app for the BabyPing web UI."""
     app = Flask(__name__)
 
@@ -41,6 +43,10 @@ def create_app(args, frame_buffer=None):
             "last_motion_time": last_motion,
             "last_frame_time": last_frame,
             "roi": {"x": roi[0], "y": roi[1], "w": roi[2], "h": roi[3]} if roi else None,
+            "tailscale_ip": get_tailscale_ip(),
+            "audio_level": frame_buffer.get_audio_level(),
+            "last_sound_time": frame_buffer.get_last_sound_time(),
+            "audio_enabled": frame_buffer.get_audio_enabled(),
         })
 
     @app.route("/roi", methods=["POST"])
@@ -74,6 +80,21 @@ def create_app(args, frame_buffer=None):
     def snapshot_file(filename):
         snapshot_dir = os.path.expanduser(args.snapshot_dir)
         return send_from_directory(snapshot_dir, filename)
+
+    @app.route("/events")
+    def events():
+        if event_log is None:
+            return jsonify([])
+        limit = request.args.get("limit", 50, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        event_type = request.args.get("type")
+        if event_type == "all":
+            event_type = None
+        return jsonify(event_log.get_events(limit=limit, offset=offset, event_type=event_type))
+
+    @app.route("/timeline")
+    def timeline():
+        return TIMELINE_TEMPLATE
 
     return app
 
@@ -285,6 +306,25 @@ html, body {
 .live-pill.delayed .live-dot { background: var(--amber); animation-duration: 1.2s; }
 .live-pill.offline .live-dot { background: #bf616a; animation: none; opacity: 0.6; }
 
+.secure-pill {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px 4px 7px;
+  background: var(--green-soft);
+  border: 1px solid rgba(163,190,140,0.2);
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--green);
+  text-transform: uppercase;
+}
+
+.secure-pill.visible { display: flex; }
+
+.secure-pill svg { width: 11px; height: 11px; }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.75); }
@@ -357,6 +397,43 @@ html, body {
 }
 
 .night-icon { font-size: 14px; line-height: 1; }
+
+/* ── Audio VU meter ── */
+.audio-card {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 80px;
+}
+
+.audio-card.visible { display: flex; }
+
+.audio-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  transition: color 0.4s;
+}
+
+.audio-card.sound-on .audio-label { color: var(--amber); }
+
+.vu-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.vu-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--text-muted);
+  transition: width 0.15s ease, background 0.3s ease;
+}
 
 /* ── Audio alert button ── */
 .notify-btn {
@@ -610,6 +687,10 @@ html, body {
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
         </button>
         <span class="clock" id="clock"></span>
+        <div class="secure-pill" id="secure-pill">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z"/></svg>
+          <span>Secure</span>
+        </div>
         <div class="live-pill">
           <span class="live-dot"></span>
           <span id="live-label">Live</span>
@@ -623,6 +704,10 @@ html, body {
           <div class="status-dot"></div>
           <span class="status-text" id="motion-text">No motion</span>
         </div>
+        <div class="status-card tag audio-card" id="audio-card">
+          <span class="audio-label" id="audio-label">Audio</span>
+          <div class="vu-track"><div class="vu-fill" id="vu-fill"></div></div>
+        </div>
         <div class="status-card tag" id="sens-card"></div>
         <div class="status-card tag" id="night-card" style="display:none">
           <span class="night-icon">&#9790;</span>
@@ -630,6 +715,9 @@ html, body {
         <div class="status-card tag roi-btn" id="roi-btn" onclick="enterRoiMode()">
           <span class="roi-label">ROI</span>
         </div>
+        <a href="/timeline" class="status-card tag timeline-btn" id="timeline-btn" style="text-decoration:none;color:var(--text-dim)">
+          <span style="font-size:11px;font-weight:700;letter-spacing:0.5px">Timeline</span>
+        </a>
       </div>
     </div>
 
@@ -680,6 +768,10 @@ const viewerImg = document.getElementById('viewer-img');
 const livePill = document.querySelector('.live-pill');
 const liveLabel = document.getElementById('live-label');
 const streamImg = streamWrap.querySelector('img');
+const securePill = document.getElementById('secure-pill');
+const audioCard = document.getElementById('audio-card');
+const audioLabel = document.getElementById('audio-label');
+const vuFill = document.getElementById('vu-fill');
 
 /* ROI state (initialized early for status polling) */
 var currentRoi = null;
@@ -688,6 +780,7 @@ var currentRoi = null;
 var audioCtx = null;
 var audioEnabled = false;
 var lastMotionAlerted = 0;
+var lastSoundAlerted = 0;
 var statusInitialized = false;
 var notifyBtn = document.getElementById('notify-btn');
 
@@ -782,6 +875,13 @@ function updateStatus() {
     currentRoi = data.roi;
     updateRoiBtn();
 
+    /* Tailscale secure indicator */
+    if (data.tailscale_ip) {
+      securePill.classList.add('visible');
+    } else {
+      securePill.classList.remove('visible');
+    }
+
     /* Motion status */
     if (data.last_motion_time) {
       const ago = Math.round(Date.now() / 1000 - data.last_motion_time);
@@ -805,15 +905,55 @@ function updateStatus() {
       motionText.textContent = 'No motion';
     }
 
-    /* Audio alert on new motion events */
+    /* Audio level VU meter */
+    if (data.audio_enabled) {
+      audioCard.classList.add('visible');
+      var level = data.audio_level || 0;
+      var pct = Math.min(level * 100 / 0.5, 100);
+      vuFill.style.width = pct + '%';
+      if (pct < 10) { vuFill.style.background = 'var(--text-muted)'; }
+      else if (pct < 40) { vuFill.style.background = 'var(--green)'; }
+      else if (pct < 70) { vuFill.style.background = 'var(--amber)'; }
+      else { vuFill.style.background = '#bf616a'; }
+
+      if (data.last_sound_time) {
+        var soundAgo = Math.round(Date.now() / 1000 - data.last_sound_time);
+        if (soundAgo < 5) {
+          audioCard.classList.add('sound-on');
+          audioLabel.textContent = 'Sound now';
+        } else if (soundAgo < 60) {
+          audioCard.classList.remove('sound-on');
+          audioLabel.textContent = 'Sound ' + soundAgo + 's ago';
+        } else {
+          audioCard.classList.remove('sound-on');
+          audioLabel.textContent = 'Audio';
+        }
+      } else {
+        audioCard.classList.remove('sound-on');
+        audioLabel.textContent = 'Audio';
+      }
+    } else {
+      audioCard.classList.remove('visible');
+    }
+
+    /* Audio alert on new motion or sound events */
     if (!statusInitialized) {
       lastMotionAlerted = data.last_motion_time || 0;
+      lastSoundAlerted = data.last_sound_time || 0;
       statusInitialized = true;
-    } else if (audioEnabled && data.last_motion_time && data.last_motion_time > lastMotionAlerted) {
-      lastMotionAlerted = data.last_motion_time;
-      ensureAudio();
-      playAlertSound();
-      try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+    } else if (audioEnabled) {
+      if (data.last_motion_time && data.last_motion_time > lastMotionAlerted) {
+        lastMotionAlerted = data.last_motion_time;
+        ensureAudio();
+        playAlertSound();
+        try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+      }
+      if (data.last_sound_time && data.last_sound_time > lastSoundAlerted) {
+        lastSoundAlerted = data.last_sound_time;
+        ensureAudio();
+        playAlertSound();
+        try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+      }
     }
   }).catch(function() {});
 }
@@ -1027,6 +1167,327 @@ function updateRoiBtn() {
 }
 
 window.addEventListener('resize', function() { if (roiMode) exitRoiMode(); });
+</script>
+</body>
+</html>"""
+
+
+TIMELINE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#080810">
+<title>BabyPing - Timeline</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0c0c14;
+  --bg-deep: #080810;
+  --surface: rgba(14, 14, 24, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --glass-shine: rgba(255, 255, 255, 0.04);
+  --amber: #f0c674;
+  --amber-soft: rgba(240, 198, 116, 0.1);
+  --green: #a3be8c;
+  --green-soft: rgba(163, 190, 140, 0.12);
+  --text: #e5e9f0;
+  --text-dim: rgba(229, 233, 240, 0.55);
+  --text-muted: rgba(229, 233, 240, 0.28);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.timeline-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Header */
+.tl-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(14px + var(--sat)) 16px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.tl-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--surface);
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.tl-title {
+  font-family: 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700;
+  font-size: 19px;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+/* Filters */
+.tl-filters {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg);
+}
+
+.filter-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.filter-btn.active {
+  background: var(--amber-soft);
+  border-color: rgba(240, 198, 116, 0.3);
+  color: var(--amber);
+}
+
+/* Events list */
+.tl-events {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 16px calc(16px + var(--sab));
+  -webkit-overflow-scrolling: touch;
+}
+
+.tl-events::-webkit-scrollbar { width: 4px; }
+.tl-events::-webkit-scrollbar-track { background: transparent; }
+.tl-events::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+
+/* Event card */
+.event-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: border-color 0.3s;
+}
+
+.event-card.motion { border-left: 3px solid var(--amber); }
+.event-card.sound { border-left: 3px solid #81a1c1; }
+
+.event-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+
+.event-icon.motion {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.event-icon.sound {
+  background: rgba(129, 161, 193, 0.1);
+  color: #81a1c1;
+}
+
+.event-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.event-type {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.event-detail {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.event-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-snap {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* Empty state */
+.tl-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.tl-empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+/* Loading */
+.tl-loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+</style>
+</head>
+<body>
+
+<div class="timeline-page">
+  <div class="tl-header">
+    <a href="/" class="tl-back">&#8249;</a>
+    <span class="tl-title">BabyPing Timeline</span>
+  </div>
+
+  <div class="tl-filters">
+    <button class="filter-btn active" data-type="all" onclick="setFilter('all')">All</button>
+    <button class="filter-btn" data-type="motion" onclick="setFilter('motion')">Motion</button>
+    <button class="filter-btn" data-type="sound" onclick="setFilter('sound')">Sound</button>
+  </div>
+
+  <div class="tl-events" id="timeline-events"></div>
+</div>
+
+<script>
+var currentFilter = 'all';
+var eventsContainer = document.getElementById('timeline-events');
+
+function setFilter(type) {
+  currentFilter = type;
+  var btns = document.querySelectorAll('.filter-btn');
+  btns.forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-type') === type);
+  });
+  loadEvents();
+}
+
+function formatTime(ts) {
+  var d = new Date(ts * 1000);
+  var now = Date.now();
+  var ago = Math.round((now - d.getTime()) / 1000);
+
+  if (ago < 5) return 'Just now';
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+
+  var h = d.getHours();
+  var m = String(d.getMinutes()).padStart(2, '0');
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  var month = d.toLocaleString('default', { month: 'short' });
+  return month + ' ' + d.getDate() + ', ' + ((h % 12) || 12) + ':' + m + ' ' + ampm;
+}
+
+function renderEvents(events) {
+  if (events.length === 0) {
+    eventsContainer.innerHTML = '<div class="tl-empty"><div class="tl-empty-icon">&#9203;</div>No events recorded yet</div>';
+    return;
+  }
+
+  var html = '';
+  events.forEach(function(e) {
+    var isMotion = e.type === 'motion';
+    var icon = isMotion ? '&#128065;' : '&#128266;';
+    var label = isMotion ? 'Motion Detected' : 'Sound Detected';
+    var detail = '';
+    if (isMotion && e.area !== null) {
+      detail = 'Area: ' + Math.round(e.area) + 'px&#178;';
+    } else if (!isMotion && e.audio_level !== null) {
+      detail = 'Level: ' + (e.audio_level * 100).toFixed(0) + '%';
+    }
+
+    var snap = '';
+    if (e.snapshot) {
+      snap = '<img class="event-snap" src="/snapshots/' + e.snapshot + '" alt="snap">';
+    }
+
+    html += '<div class="event-card ' + e.type + '">' +
+      '<div class="event-icon ' + e.type + '">' + icon + '</div>' +
+      '<div class="event-body">' +
+        '<div class="event-type">' + label + '</div>' +
+        (detail ? '<div class="event-detail">' + detail + '</div>' : '') +
+      '</div>' +
+      '<span class="event-time">' + formatTime(e.timestamp) + '</span>' +
+      snap +
+    '</div>';
+  });
+
+  eventsContainer.innerHTML = html;
+}
+
+function loadEvents() {
+  var url = '/events?limit=50';
+  if (currentFilter !== 'all') {
+    url += '&type=' + currentFilter;
+  }
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    renderEvents(data);
+  }).catch(function() {
+    eventsContainer.innerHTML = '<div class="tl-loading">Failed to load events</div>';
+  });
+}
+
+loadEvents();
+setInterval(loadEvents, 5000);
 </script>
 </body>
 </html>"""

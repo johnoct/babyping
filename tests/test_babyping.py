@@ -11,7 +11,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock, patch
 
-from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, get_tailscale_ip, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -306,6 +306,69 @@ class TestFrameBuffer:
         buf.set_roi(None)
         assert buf.get_roi() is None
 
+    def test_audio_level_initially_zero(self):
+        buf = FrameBuffer()
+        assert buf.get_audio_level() == 0.0
+
+    def test_set_and_get_audio_level(self):
+        buf = FrameBuffer()
+        buf.set_audio_level(0.42)
+        assert buf.get_audio_level() == 0.42
+
+    def test_last_sound_time_initially_none(self):
+        buf = FrameBuffer()
+        assert buf.get_last_sound_time() is None
+
+    def test_set_and_get_last_sound_time(self):
+        buf = FrameBuffer()
+        buf.set_last_sound_time(99999.0)
+        assert buf.get_last_sound_time() == 99999.0
+
+    def test_audio_enabled_initially_false(self):
+        buf = FrameBuffer()
+        assert buf.get_audio_enabled() is False
+
+    def test_set_and_get_audio_enabled(self):
+        buf = FrameBuffer()
+        buf.set_audio_enabled(True)
+        assert buf.get_audio_enabled() is True
+        buf.set_audio_enabled(False)
+        assert buf.get_audio_enabled() is False
+
+
+# --- parse_args audio flag tests ---
+
+class TestParseArgsAudio:
+    def test_no_audio_default_off(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.no_audio is False
+
+    def test_no_audio_flag(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--no-audio"])
+        args = parse_args()
+        assert args.no_audio is True
+
+    def test_audio_device_default_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.audio_device is None
+
+    def test_audio_device_custom(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--audio-device", "2"])
+        args = parse_args()
+        assert args.audio_device == 2
+
+    def test_audio_threshold_default_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.audio_threshold is None
+
+    def test_audio_threshold_custom(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--audio-threshold", "0.05"])
+        args = parse_args()
+        assert args.audio_threshold == 0.05
+
 
 # --- parse_args --fps tests ---
 
@@ -421,3 +484,75 @@ class TestReconnectCamera:
         delays = [call.args[0] for call in mock_sleep.call_args_list]
         # 10, 20, 40, 60, 60, 60, 60, 60
         assert all(d <= 60 for d in delays)
+
+
+# --- get_tailscale_ip tests ---
+
+class TestGetTailscaleIp:
+    def test_returns_tailscale_ip_when_present(self):
+        """Should return 100.x.x.x address from network interfaces."""
+        fake_output = (
+            "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280\n"
+            "\tinet 100.85.42.17 --> 100.85.42.17 netmask 0xffffffff\n"
+        )
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result == "100.85.42.17"
+
+    def test_returns_none_when_no_tailscale(self):
+        """Should return None when no 100.x.x.x address found."""
+        fake_output = (
+            "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n"
+            "\tinet 192.168.1.50 netmask 0xffffff00 broadcast 192.168.1.255\n"
+        )
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result is None
+
+    def test_returns_none_on_subprocess_error(self):
+        """Should return None if ifconfig fails."""
+        with patch("babyping.subprocess.run", side_effect=Exception("command failed")):
+            result = get_tailscale_ip()
+        assert result is None
+
+    def test_ignores_non_cgnat_100_addresses(self):
+        """Should only match 100.64.0.0/10 range (100.64-127.x.x)."""
+        fake_output = (
+            "en1: flags=8863<UP> mtu 1500\n"
+            "\tinet 100.0.0.1 netmask 0xffffff00\n"
+        )
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result is None
+
+    def test_matches_cgnat_boundary_low(self):
+        """100.64.0.1 is within CGNAT range."""
+        fake_output = "utun3: flags=8051<UP> mtu 1280\n\tinet 100.64.0.1 --> 100.64.0.1 netmask 0xffffffff\n"
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result == "100.64.0.1"
+
+    def test_matches_cgnat_boundary_high(self):
+        """100.127.255.254 is within CGNAT range."""
+        fake_output = "utun3: flags=8051<UP> mtu 1280\n\tinet 100.127.255.254 --> 100.127.255.254 netmask 0xffffffff\n"
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result == "100.127.255.254"
+
+    def test_returns_first_tailscale_ip_if_multiple(self):
+        """If multiple Tailscale IPs found, return the first one."""
+        fake_output = (
+            "utun3: flags=8051<UP> mtu 1280\n"
+            "\tinet 100.100.1.1 --> 100.100.1.1 netmask 0xffffffff\n"
+            "utun4: flags=8051<UP> mtu 1280\n"
+            "\tinet 100.100.2.2 --> 100.100.2.2 netmask 0xffffffff\n"
+        )
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result = get_tailscale_ip()
+        assert result == "100.100.1.1"
