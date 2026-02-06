@@ -13,8 +13,7 @@ def create_app(args, frame_buffer=None, event_log=None):
 
     @app.route("/")
     def index():
-        snapshots_enabled = args.snapshots
-        return HTML_TEMPLATE.replace("{{SNAPSHOTS_ENABLED}}", "true" if snapshots_enabled else "false")
+        return HTML_TEMPLATE
 
     @app.route("/stream")
     def stream():
@@ -91,10 +90,6 @@ def create_app(args, frame_buffer=None, event_log=None):
         if event_type == "all":
             event_type = None
         return jsonify(event_log.get_events(limit=limit, offset=offset, event_type=event_type))
-
-    @app.route("/timeline")
-    def timeline():
-        return TIMELINE_TEMPLATE
 
     return app
 
@@ -461,88 +456,210 @@ html, body {
 
 .notify-btn svg { width: 14px; height: 14px; }
 
-/* ── Snapshots panel ── */
-.snap-panel {
-  flex-shrink: 0;
-  background: var(--surface);
-  border-top: 1px solid var(--glass-border);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  max-height: 40px;
-  overflow: hidden;
-  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+/* ── Bottom sheet ── */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0);
+  z-index: 49;
+  pointer-events: none;
+  transition: background 0.4s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.snap-panel.open { max-height: 152px; }
+.sheet-backdrop.visible {
+  pointer-events: auto;
+}
 
-.snap-toggle {
+.sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 92vh;
+  z-index: 50;
+  background: var(--surface);
+  border-radius: 20px 20px 0 0;
+  border-top: 1px solid var(--glass-border);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  transform: translateY(var(--sheet-y));
+  transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 16px;
-  cursor: pointer;
+  flex-direction: column;
+  will-change: transform;
+  touch-action: none;
+}
+
+.sheet.dragging {
+  transition: none !important;
+}
+
+.sheet-handle {
+  flex-shrink: 0;
+  padding: 0 16px;
+  cursor: grab;
   -webkit-tap-highlight-color: transparent;
 }
 
-.snap-label {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-muted);
+.sheet-handle:active { cursor: grabbing; }
+
+.sheet-pill {
+  width: 36px;
+  height: 4px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  margin: 10px auto 8px;
 }
 
-.snap-badge {
-  font-size: 10px;
+.sheet-peek {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.sheet-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+
+.sheet-count {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-muted);
   background: var(--glass-shine);
-  padding: 2px 7px;
-  border-radius: 8px;
-  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 22px;
+  text-align: center;
 }
 
-.snap-chevron {
-  font-size: 10px;
-  color: var(--text-muted);
-  transition: transform 0.3s ease;
-}
-
-.snap-panel.open .snap-chevron { transform: rotate(180deg); }
-
-.snap-scroll {
+.sheet-filters {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
-  padding: 2px 16px 12px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
+  padding: 4px 16px 12px;
 }
 
-.snap-scroll::-webkit-scrollbar { display: none; }
-
-.snap-thumb {
-  flex-shrink: 0;
-  scroll-snap-align: start;
-  width: 90px;
-  height: 68px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
+.sheet-filter {
+  padding: 6px 14px;
+  border-radius: 20px;
   border: 1px solid var(--glass-border);
-  cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
-}
-
-.snap-thumb:active { transform: scale(0.96); opacity: 0.8; }
-
-@media (hover: hover) {
-  .snap-thumb:hover { transform: scale(1.04); border-color: rgba(255,255,255,0.14); }
-}
-
-.snap-empty {
-  padding: 2px 16px 14px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
   font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.sheet-filter.active {
+  background: var(--amber-soft);
+  border-color: rgba(240, 198, 116, 0.3);
+  color: var(--amber);
+}
+
+.sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px calc(16px + var(--sab));
+  overscroll-behavior: contain;
+}
+
+.sheet-body::-webkit-scrollbar { width: 4px; }
+.sheet-body::-webkit-scrollbar-track { background: transparent; }
+.sheet-body::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+
+/* ── Event cards ── */
+.evt-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: border-color 0.3s;
+}
+
+.evt-card.motion { border-left: 3px solid var(--amber); }
+.evt-card.sound { border-left: 3px solid #81a1c1; }
+
+.evt-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+
+.evt-icon.motion {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.evt-icon.sound {
+  background: rgba(129, 161, 193, 0.1);
+  color: #81a1c1;
+}
+
+.evt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.evt-type {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.evt-detail {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.evt-time {
+  font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.evt-snap {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.evt-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.evt-empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.4;
 }
 
 /* ── ROI selection ── */
@@ -715,9 +832,6 @@ html, body {
         <div class="status-card tag roi-btn" id="roi-btn" onclick="enterRoiMode()">
           <span class="roi-label">ROI</span>
         </div>
-        <a href="/timeline" class="status-card tag timeline-btn" id="timeline-btn" style="text-decoration:none;color:var(--text-dim)">
-          <span style="font-size:11px;font-weight:700;letter-spacing:0.5px">Timeline</span>
-        </a>
       </div>
     </div>
 
@@ -731,18 +845,26 @@ html, body {
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Snapshots -->
-  <div class="snap-panel" id="snap-panel">
-    <div class="snap-toggle" id="snap-toggle">
-      <div>
-        <span class="snap-label">Recent Events</span>
-        <span class="snap-badge" id="snap-count"></span>
-      </div>
-      <span class="snap-chevron">&#9660;</span>
+<!-- Sheet backdrop -->
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+
+<!-- Events bottom sheet -->
+<div class="sheet" id="sheet">
+  <div class="sheet-handle" id="sheet-handle">
+    <div class="sheet-pill"></div>
+    <div class="sheet-peek">
+      <span class="sheet-title">Events</span>
+      <span class="sheet-count" id="sheet-count">0</span>
     </div>
-    <div class="snap-scroll" id="snap-scroll"></div>
   </div>
+  <div class="sheet-filters" id="sheet-filters">
+    <button class="sheet-filter active" data-type="all">All</button>
+    <button class="sheet-filter" data-type="motion">Motion</button>
+    <button class="sheet-filter" data-type="sound">Sound</button>
+  </div>
+  <div class="sheet-body" id="sheet-body"></div>
 </div>
 
 <!-- Image viewer -->
@@ -752,7 +874,6 @@ html, body {
 </div>
 
 <script>
-const snapshotsEnabled = {{SNAPSHOTS_ENABLED}};
 const streamWrap = document.getElementById('stream-wrap');
 const motionCard = document.getElementById('motion-card');
 const motionText = document.getElementById('motion-text');
@@ -760,9 +881,6 @@ const sensCard = document.getElementById('sens-card');
 const nightCard = document.getElementById('night-card');
 const clockEl = document.getElementById('clock');
 const loadingEl = document.getElementById('loading');
-const snapPanel = document.getElementById('snap-panel');
-const snapScroll = document.getElementById('snap-scroll');
-const snapCount = document.getElementById('snap-count');
 const viewer = document.getElementById('viewer');
 const viewerImg = document.getElementById('viewer-img');
 const livePill = document.querySelector('.live-pill');
@@ -958,26 +1076,6 @@ function updateStatus() {
   }).catch(function() {});
 }
 
-/* Snapshots */
-function updateSnapshots() {
-  if (!snapshotsEnabled) { snapPanel.style.display = 'none'; return; }
-  fetch('/snapshots').then(function(r) { return r.json(); }).then(function(files) {
-    snapCount.textContent = files.length || '';
-    if (files.length === 0) {
-      snapScroll.innerHTML = '<div class="snap-empty">No events yet</div>';
-      return;
-    }
-    snapScroll.innerHTML = files.map(function(f) {
-      return '<img class="snap-thumb" src="/snapshots/' + f + '" alt="' + f + '" onclick="openViewer(this.src)">';
-    }).join('');
-  }).catch(function() {});
-}
-
-/* Drawer toggle */
-document.getElementById('snap-toggle').addEventListener('click', function() {
-  snapPanel.classList.toggle('open');
-});
-
 /* Image viewer */
 function openViewer(src) {
   viewerImg.src = src;
@@ -990,9 +1088,239 @@ function closeViewer() {
 
 /* Init */
 updateStatus();
-updateSnapshots();
 setInterval(updateStatus, 3000);
-setInterval(updateSnapshots, 10000);
+
+/* ── Bottom sheet ── */
+var sheet = document.getElementById('sheet');
+var sheetBackdrop = document.getElementById('sheet-backdrop');
+var sheetBody = document.getElementById('sheet-body');
+var sheetCount = document.getElementById('sheet-count');
+var sheetFilters = document.getElementById('sheet-filters');
+
+var sheetHeight = sheet.offsetHeight;
+var SNAP_PEEK = sheetHeight - 60;
+var SNAP_HALF = sheetHeight * 0.5;
+var SNAP_FULL = 0;
+var sheetY = SNAP_PEEK;
+var sheetFilter = 'all';
+var sheetDragging = false;
+var sheetStartY = 0;
+var sheetStartTranslate = 0;
+var sheetLastMoveY = 0;
+var sheetLastMoveTime = 0;
+var sheetVelocity = 0;
+
+function setSheetY(y) {
+  sheetY = y;
+  sheet.style.setProperty('--sheet-y', y + 'px');
+  /* Interpolate backdrop: 0 at peek, 0.5 at full */
+  var range = SNAP_PEEK - SNAP_FULL;
+  var progress = range > 0 ? 1 - ((y - SNAP_FULL) / range) : 0;
+  progress = Math.max(0, Math.min(1, progress));
+  var opacity = progress * 0.5;
+  sheetBackdrop.style.background = 'rgba(0,0,0,' + opacity + ')';
+  if (progress > 0.02) { sheetBackdrop.classList.add('visible'); }
+  else { sheetBackdrop.classList.remove('visible'); }
+}
+
+/* Initialise to peek */
+setSheetY(SNAP_PEEK);
+
+function snapSheet(target) {
+  sheet.classList.remove('dragging');
+  setSheetY(target);
+}
+
+function recalcSnaps() {
+  sheetHeight = sheet.offsetHeight;
+  SNAP_PEEK = sheetHeight - 60;
+  SNAP_HALF = sheetHeight * 0.5;
+  SNAP_FULL = 0;
+}
+
+function onSheetPointerDown(e) {
+  /* Allow scrolling inside sheet-body when expanded */
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+
+  var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  sheetDragging = true;
+  sheetStartY = clientY;
+  sheetStartTranslate = sheetY;
+  sheetLastMoveY = clientY;
+  sheetLastMoveTime = Date.now();
+  sheetVelocity = 0;
+  sheet.classList.add('dragging');
+}
+
+function onSheetPointerMove(e) {
+  if (!sheetDragging) return;
+  var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  var deltaY = clientY - sheetStartY;
+  var newY = sheetStartTranslate + deltaY;
+
+  /* Rubber band past bounds */
+  if (newY < SNAP_FULL) {
+    newY = SNAP_FULL + (newY - SNAP_FULL) * 0.3;
+  } else if (newY > SNAP_PEEK) {
+    newY = SNAP_PEEK + (newY - SNAP_PEEK) * 0.3;
+  }
+
+  setSheetY(newY);
+
+  /* Track velocity */
+  var now = Date.now();
+  var dt = now - sheetLastMoveTime;
+  if (dt > 0) {
+    sheetVelocity = (clientY - sheetLastMoveY) / dt * 1000;
+  }
+  sheetLastMoveY = clientY;
+  sheetLastMoveTime = now;
+
+  e.preventDefault();
+}
+
+function onSheetPointerUp() {
+  if (!sheetDragging) return;
+  sheetDragging = false;
+
+  /* Fast swipe detection */
+  if (sheetVelocity < -800) { snapSheet(SNAP_FULL); return; }
+  if (sheetVelocity > 800) { snapSheet(SNAP_PEEK); return; }
+
+  /* Snap to nearest */
+  var snaps = [SNAP_FULL, SNAP_HALF, SNAP_PEEK];
+  var closest = snaps[0];
+  var minDist = Math.abs(sheetY - snaps[0]);
+  for (var i = 1; i < snaps.length; i++) {
+    var d = Math.abs(sheetY - snaps[i]);
+    if (d < minDist) { minDist = d; closest = snaps[i]; }
+  }
+  snapSheet(closest);
+}
+
+/* Touch events on sheet */
+sheet.addEventListener('touchstart', function(e) {
+  /* Let sheet-body scroll naturally when at full and content scrolled */
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+  onSheetPointerDown(e);
+}, { passive: false });
+sheet.addEventListener('touchmove', function(e) {
+  if (!sheetDragging) return;
+  onSheetPointerMove(e);
+}, { passive: false });
+sheet.addEventListener('touchend', onSheetPointerUp);
+
+/* Mouse events on sheet */
+sheet.addEventListener('mousedown', function(e) {
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+  onSheetPointerDown(e);
+});
+document.addEventListener('mousemove', function(e) {
+  if (!sheetDragging) return;
+  onSheetPointerMove(e);
+});
+document.addEventListener('mouseup', onSheetPointerUp);
+
+/* Backdrop tap to dismiss */
+sheetBackdrop.addEventListener('click', function() { snapSheet(SNAP_PEEK); });
+
+/* Recalculate on resize */
+window.addEventListener('resize', function() {
+  recalcSnaps();
+  snapSheet(SNAP_PEEK);
+});
+
+/* Handle sheet-body scroll: only drag sheet when scrolled to top and swiping down */
+sheetBody.addEventListener('touchstart', function(e) {
+  if (sheetY > SNAP_HALF) return; /* Not expanded, let sheet handle it */
+  if (sheetBody.scrollTop <= 0) {
+    /* At top of scroll, let the sheet handle dragging */
+    return;
+  }
+  /* Content is scrolled, stop propagation so sheet body scrolls normally */
+  e.stopPropagation();
+}, { passive: true });
+
+sheetBody.addEventListener('touchmove', function(e) {
+  if (sheetDragging) return;
+  /* When at top and pulling down, prevent default scroll and start sheet drag */
+  if (sheetBody.scrollTop <= 0 && sheetY <= SNAP_HALF) {
+    return; /* handled by sheet listener */
+  }
+  e.stopPropagation();
+}, { passive: true });
+
+/* Filter buttons */
+sheetFilters.addEventListener('click', function(e) {
+  var btn = e.target.closest('.sheet-filter');
+  if (!btn) return;
+  sheetFilter = btn.getAttribute('data-type');
+  var all = sheetFilters.querySelectorAll('.sheet-filter');
+  all.forEach(function(b) { b.classList.toggle('active', b === btn); });
+  loadSheetEvents();
+});
+
+/* Event loading */
+function formatEvtTime(ts) {
+  var d = new Date(ts * 1000);
+  var now = Date.now();
+  var ago = Math.round((now - d.getTime()) / 1000);
+  if (ago < 5) return 'Just now';
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+  var h = d.getHours();
+  var m = String(d.getMinutes()).padStart(2, '0');
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  var month = d.toLocaleString('default', { month: 'short' });
+  return month + ' ' + d.getDate() + ', ' + ((h % 12) || 12) + ':' + m + ' ' + ampm;
+}
+
+function renderSheetEvents(events) {
+  if (events.length === 0) {
+    sheetBody.innerHTML = '<div class="evt-empty"><div class="evt-empty-icon">&#9203;</div>No events yet</div>';
+    sheetCount.textContent = '0';
+    return;
+  }
+  sheetCount.textContent = events.length;
+  var html = '';
+  events.forEach(function(e) {
+    var isMotion = e.type === 'motion';
+    var icon = isMotion ? '&#128065;' : '&#128266;';
+    var label = isMotion ? 'Motion Detected' : 'Sound Detected';
+    var detail = '';
+    if (isMotion && e.area !== null && e.area !== undefined) {
+      detail = 'Area: ' + Math.round(e.area) + 'px&#178;';
+    } else if (!isMotion && e.audio_level !== null && e.audio_level !== undefined) {
+      detail = 'Level: ' + (e.audio_level * 100).toFixed(0) + '%';
+    }
+    var snap = '';
+    if (e.snapshot) {
+      snap = '<img class="evt-snap" src="/snapshots/' + e.snapshot + '" alt="snap" onclick="openViewer(this.src)">';
+    }
+    html += '<div class="evt-card ' + e.type + '">' +
+      '<div class="evt-icon ' + e.type + '">' + icon + '</div>' +
+      '<div class="evt-body">' +
+        '<div class="evt-type">' + label + '</div>' +
+        (detail ? '<div class="evt-detail">' + detail + '</div>' : '') +
+      '</div>' +
+      '<span class="evt-time">' + formatEvtTime(e.timestamp) + '</span>' +
+      snap +
+    '</div>';
+  });
+  sheetBody.innerHTML = html;
+}
+
+function loadSheetEvents() {
+  var url = '/events?limit=50';
+  if (sheetFilter !== 'all') { url += '&type=' + sheetFilter; }
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    renderSheetEvents(data);
+  }).catch(function() {});
+}
+
+loadSheetEvents();
+setInterval(loadSheetEvents, 5000);
 
 /* ── ROI selection ── */
 const roiOverlay = document.getElementById('roi-overlay');
@@ -1172,322 +1500,3 @@ window.addEventListener('resize', function() { if (roiMode) exitRoiMode(); });
 </html>"""
 
 
-TIMELINE_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#080810">
-<title>BabyPing - Timeline</title>
-<style>
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-:root {
-  --bg: #0c0c14;
-  --bg-deep: #080810;
-  --surface: rgba(14, 14, 24, 0.82);
-  --glass-border: rgba(255, 255, 255, 0.07);
-  --glass-shine: rgba(255, 255, 255, 0.04);
-  --amber: #f0c674;
-  --amber-soft: rgba(240, 198, 116, 0.1);
-  --green: #a3be8c;
-  --green-soft: rgba(163, 190, 140, 0.12);
-  --text: #e5e9f0;
-  --text-dim: rgba(229, 233, 240, 0.55);
-  --text-muted: rgba(229, 233, 240, 0.28);
-  --radius: 14px;
-  --radius-sm: 8px;
-  --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
-}
-
-html, body {
-  height: 100%;
-  background: var(--bg-deep);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
-
-.timeline-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-/* Header */
-.tl-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: calc(14px + var(--sat)) 16px 12px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--glass-border);
-}
-
-.tl-back {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--glass-border);
-  background: var(--surface);
-  color: var(--text-dim);
-  text-decoration: none;
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.tl-title {
-  font-family: 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, sans-serif;
-  font-weight: 700;
-  font-size: 19px;
-  color: var(--text);
-  letter-spacing: -0.3px;
-}
-
-/* Filters */
-.tl-filters {
-  flex-shrink: 0;
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  background: var(--bg);
-}
-
-.filter-btn {
-  padding: 6px 14px;
-  border-radius: 20px;
-  border: 1px solid var(--glass-border);
-  background: var(--surface);
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.3s, border-color 0.3s, color 0.3s;
-}
-
-.filter-btn.active {
-  background: var(--amber-soft);
-  border-color: rgba(240, 198, 116, 0.3);
-  color: var(--amber);
-}
-
-/* Events list */
-.tl-events {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 16px calc(16px + var(--sab));
-  -webkit-overflow-scrolling: touch;
-}
-
-.tl-events::-webkit-scrollbar { width: 4px; }
-.tl-events::-webkit-scrollbar-track { background: transparent; }
-.tl-events::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
-
-/* Event card */
-.event-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  margin-bottom: 8px;
-  background: var(--surface);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  transition: border-color 0.3s;
-}
-
-.event-card.motion { border-left: 3px solid var(--amber); }
-.event-card.sound { border-left: 3px solid #81a1c1; }
-
-.event-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 15px;
-}
-
-.event-icon.motion {
-  background: var(--amber-soft);
-  color: var(--amber);
-}
-
-.event-icon.sound {
-  background: rgba(129, 161, 193, 0.1);
-  color: #81a1c1;
-}
-
-.event-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.event-type {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-
-.event-detail {
-  font-size: 11.5px;
-  color: var(--text-dim);
-}
-
-.event-time {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.event-snap {
-  width: 48px;
-  height: 36px;
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid var(--glass-border);
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-/* Empty state */
-.tl-empty {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-muted);
-  font-size: 14px;
-}
-
-.tl-empty-icon {
-  font-size: 32px;
-  margin-bottom: 12px;
-  opacity: 0.4;
-}
-
-/* Loading */
-.tl-loading {
-  text-align: center;
-  padding: 20px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-</style>
-</head>
-<body>
-
-<div class="timeline-page">
-  <div class="tl-header">
-    <a href="/" class="tl-back">&#8249;</a>
-    <span class="tl-title">BabyPing Timeline</span>
-  </div>
-
-  <div class="tl-filters">
-    <button class="filter-btn active" data-type="all" onclick="setFilter('all')">All</button>
-    <button class="filter-btn" data-type="motion" onclick="setFilter('motion')">Motion</button>
-    <button class="filter-btn" data-type="sound" onclick="setFilter('sound')">Sound</button>
-  </div>
-
-  <div class="tl-events" id="timeline-events"></div>
-</div>
-
-<script>
-var currentFilter = 'all';
-var eventsContainer = document.getElementById('timeline-events');
-
-function setFilter(type) {
-  currentFilter = type;
-  var btns = document.querySelectorAll('.filter-btn');
-  btns.forEach(function(b) {
-    b.classList.toggle('active', b.getAttribute('data-type') === type);
-  });
-  loadEvents();
-}
-
-function formatTime(ts) {
-  var d = new Date(ts * 1000);
-  var now = Date.now();
-  var ago = Math.round((now - d.getTime()) / 1000);
-
-  if (ago < 5) return 'Just now';
-  if (ago < 60) return ago + 's ago';
-  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
-  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
-
-  var h = d.getHours();
-  var m = String(d.getMinutes()).padStart(2, '0');
-  var ampm = h >= 12 ? 'PM' : 'AM';
-  var month = d.toLocaleString('default', { month: 'short' });
-  return month + ' ' + d.getDate() + ', ' + ((h % 12) || 12) + ':' + m + ' ' + ampm;
-}
-
-function renderEvents(events) {
-  if (events.length === 0) {
-    eventsContainer.innerHTML = '<div class="tl-empty"><div class="tl-empty-icon">&#9203;</div>No events recorded yet</div>';
-    return;
-  }
-
-  var html = '';
-  events.forEach(function(e) {
-    var isMotion = e.type === 'motion';
-    var icon = isMotion ? '&#128065;' : '&#128266;';
-    var label = isMotion ? 'Motion Detected' : 'Sound Detected';
-    var detail = '';
-    if (isMotion && e.area !== null) {
-      detail = 'Area: ' + Math.round(e.area) + 'px&#178;';
-    } else if (!isMotion && e.audio_level !== null) {
-      detail = 'Level: ' + (e.audio_level * 100).toFixed(0) + '%';
-    }
-
-    var snap = '';
-    if (e.snapshot) {
-      snap = '<img class="event-snap" src="/snapshots/' + e.snapshot + '" alt="snap">';
-    }
-
-    html += '<div class="event-card ' + e.type + '">' +
-      '<div class="event-icon ' + e.type + '">' + icon + '</div>' +
-      '<div class="event-body">' +
-        '<div class="event-type">' + label + '</div>' +
-        (detail ? '<div class="event-detail">' + detail + '</div>' : '') +
-      '</div>' +
-      '<span class="event-time">' + formatTime(e.timestamp) + '</span>' +
-      snap +
-    '</div>';
-  });
-
-  eventsContainer.innerHTML = html;
-}
-
-function loadEvents() {
-  var url = '/events?limit=50';
-  if (currentFilter !== 'all') {
-    url += '&type=' + currentFilter;
-  }
-  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
-    renderEvents(data);
-  }).catch(function() {
-    eventsContainer.innerHTML = '<div class="tl-loading">Failed to load events</div>';
-  });
-}
-
-loadEvents();
-setInterval(loadEvents, 5000);
-</script>
-</body>
-</html>"""

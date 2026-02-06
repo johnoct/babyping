@@ -57,11 +57,6 @@ class TestWebRoutes:
         data = json.loads(resp.data)
         assert isinstance(data, list)
 
-    def test_index_snapshots_disabled(self, client):
-        resp = client.get("/")
-        assert b"false" in resp.data  # SNAPSHOTS_ENABLED = false
-
-
 class TestWebSnapshotsEnabled:
     @pytest.fixture
     def snap_client(self, tmp_path):
@@ -88,11 +83,6 @@ class TestWebSnapshotsEnabled:
         resp = snap_client.get("/snapshots/2026-02-05T12-00-00.jpg")
         assert resp.status_code == 200
         assert "image/jpeg" in resp.content_type
-
-    def test_index_snapshots_enabled(self, snap_client):
-        resp = snap_client.get("/")
-        assert b"true" in resp.data  # SNAPSHOTS_ENABLED = true
-
 
 class TestWebROI:
     @pytest.fixture
@@ -308,39 +298,37 @@ class TestWebEvents:
             assert data == []
 
 
-class TestWebTimeline:
-    def test_timeline_returns_html(self, client):
-        resp = client.get("/timeline")
-        assert resp.status_code == 200
-        assert b"text/html" in resp.content_type.encode()
+class TestWebEventsSheet:
+    def test_main_page_has_events_sheet(self, client):
+        resp = client.get("/")
+        assert b"sheet" in resp.data
+        assert b"sheet-body" in resp.data
 
-    def test_timeline_has_babyping_title(self, client):
-        resp = client.get("/timeline")
-        assert b"BabyPing" in resp.data
+    def test_index_includes_sheet_markup(self, client):
+        resp = client.get("/")
+        assert b'id="sheet"' in resp.data
+        assert b'id="sheet-handle"' in resp.data
+        assert b'id="sheet-body"' in resp.data
+        assert b'id="sheet-filters"' in resp.data
 
-    def test_timeline_has_filter_buttons(self, client):
-        resp = client.get("/timeline")
-        assert b"filter-btn" in resp.data
+    def test_index_sheet_has_filter_buttons(self, client):
+        resp = client.get("/")
+        assert b"sheet-filter" in resp.data
         assert b"All" in resp.data
         assert b"Motion" in resp.data
         assert b"Sound" in resp.data
 
-    def test_timeline_has_back_link(self, client):
-        resp = client.get("/timeline")
-        assert b'href="/"' in resp.data
-
-    def test_timeline_has_events_container(self, client):
-        resp = client.get("/timeline")
-        assert b"timeline-events" in resp.data
-
-    def test_timeline_fetches_events_api(self, client):
-        resp = client.get("/timeline")
+    def test_index_sheet_fetches_events_api(self, client):
+        resp = client.get("/")
         assert b"/events" in resp.data
 
-    def test_main_page_has_timeline_button(self, client):
+    def test_index_no_timeline_route_link(self, client):
         resp = client.get("/")
-        assert b"timeline-btn" in resp.data
-        assert b"/timeline" in resp.data
+        assert b"/timeline" not in resp.data
+
+    def test_timeline_route_removed(self, client):
+        resp = client.get("/timeline")
+        assert resp.status_code == 404
 
 
 class TestWebTailscale:
