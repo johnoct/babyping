@@ -1,6 +1,7 @@
 import argparse
 import glob
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -19,6 +20,11 @@ class FrameBuffer:
         self._last_motion_time = None
         self._last_frame_time = None
         self._roi = None
+        self._audio_level = 0.0
+        self._last_sound_time = None
+        self._audio_enabled = False
+        self._motion_alerts_enabled = True
+        self._sound_alerts_enabled = True
 
     def update(self, frame_bytes):
         with self._lock:
@@ -48,6 +54,46 @@ class FrameBuffer:
     def get_roi(self):
         with self._lock:
             return self._roi
+
+    def set_audio_level(self, level):
+        with self._lock:
+            self._audio_level = level
+
+    def get_audio_level(self):
+        with self._lock:
+            return self._audio_level
+
+    def set_last_sound_time(self, t):
+        with self._lock:
+            self._last_sound_time = t
+
+    def get_last_sound_time(self):
+        with self._lock:
+            return self._last_sound_time
+
+    def set_audio_enabled(self, enabled):
+        with self._lock:
+            self._audio_enabled = enabled
+
+    def get_audio_enabled(self):
+        with self._lock:
+            return self._audio_enabled
+
+    def set_motion_alerts_enabled(self, enabled):
+        with self._lock:
+            self._motion_alerts_enabled = enabled
+
+    def get_motion_alerts_enabled(self):
+        with self._lock:
+            return self._motion_alerts_enabled
+
+    def set_sound_alerts_enabled(self, enabled):
+        with self._lock:
+            self._sound_alerts_enabled = enabled
+
+    def get_sound_alerts_enabled(self):
+        with self._lock:
+            return self._sound_alerts_enabled
 
 
 frame_buffer = FrameBuffer()
@@ -80,6 +126,14 @@ def parse_args():
                         help="Web UI port (default: 8080)")
     parser.add_argument("--fps", type=int, default=10,
                         help="Max frames per second, 0=unlimited (default: 10)")
+    parser.add_argument("--no-audio", action="store_true",
+                        help="Disable audio monitoring")
+    parser.add_argument("--audio-device", type=int, default=None,
+                        help="Audio input device index (default: system default)")
+    parser.add_argument("--audio-threshold", type=float, default=None,
+                        help="Audio threshold (0-1), omit for auto-calibration")
+    parser.add_argument("--max-events", type=int, default=1000,
+                        help="Max events to keep in log, 0=unlimited (default: 1000)")
     return parser.parse_args()
 
 
@@ -186,6 +240,21 @@ def get_local_ip():
         s.close()
 
 
+def get_tailscale_ip():
+    """Get the Tailscale IP address (100.64.0.0/10 CGNAT range), or None if not connected."""
+    try:
+        result = subprocess.run(["ifconfig"], capture_output=True, text=True)
+        for match in re.finditer(r'inet\s+(100\.(\d+)\.\d+\.\d+)', result.stdout):
+            ip = match.group(1)
+            second_octet = int(match.group(2))
+            # Tailscale uses CGNAT range 100.64.0.0/10 (second octet 64-127)
+            if 64 <= second_octet <= 127:
+                return ip
+    except Exception:
+        pass
+    return None
+
+
 def select_roi(cap):
     """Show first frame and let user draw ROI. Returns (x,y,w,h) or None if skipped."""
     ret, frame = cap.read()
@@ -253,11 +322,34 @@ def main():
     if roi:
         print(f"  ROI:          {roi}")
 
+    # Audio monitoring
+    audio_monitor = None
+    if not args.no_audio:
+        try:
+            from audio import AudioMonitor
+            audio_monitor = AudioMonitor(
+                device=args.audio_device,
+                threshold=args.audio_threshold,
+            )
+            audio_monitor.start()
+            frame_buffer.set_audio_enabled(True)
+            print(f"  Audio:        on (device={args.audio_device or 'default'}, threshold={'auto' if args.audio_threshold is None else args.audio_threshold})")
+        except Exception as e:
+            print(f"  Audio:        failed ({e})")
+    else:
+        print(f"  Audio:        off")
+
+    from events import EventLog
+    event_log = EventLog()
+
     from web import create_app
     local_ip = get_local_ip()
     print(f"  Web UI:       http://{local_ip}:{args.port}")
+    tailscale_ip = get_tailscale_ip()
+    if tailscale_ip:
+        print(f"  Web UI:       http://{tailscale_ip}:{args.port} (Tailscale)")
 
-    flask_app = create_app(args, frame_buffer)
+    flask_app = create_app(args, frame_buffer, event_log=event_log)
     web_thread = threading.Thread(
         target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
         daemon=True
@@ -267,6 +359,7 @@ def main():
 
     prev_gray = None
     last_alert_time = 0
+    last_sound_alert_time = 0
     consecutive_failures = 0
     max_frame_failures = 30
 
@@ -329,9 +422,31 @@ def main():
                         if snap_path:
                             snap_msg = f" → {snap_path}"
                     print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
-                    send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
+                    if frame_buffer.get_motion_alerts_enabled():
+                        send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
                     last_alert_time = now
                     frame_buffer.set_last_motion_time(now)
+
+                    snap_filename = os.path.basename(snap_path) if args.snapshots and snap_path else None
+                    event_log.log_event("motion", area=float(area), snapshot=snap_filename)
+                    if args.max_events > 0:
+                        event_log.prune(max_events=args.max_events)
+
+            # Sync audio state to frame buffer
+            if audio_monitor is not None:
+                frame_buffer.set_audio_level(audio_monitor.get_level())
+                sound_time = audio_monitor.get_last_sound_time()
+                if sound_time is not None:
+                    frame_buffer.set_last_sound_time(sound_time)
+                    if sound_time > last_sound_alert_time and time.time() - last_sound_alert_time >= args.cooldown:
+                        last_sound_alert_time = sound_time
+                        timestamp = datetime.now().isoformat(timespec="seconds")
+                        print(f"[{timestamp}] Sound detected")
+                        if frame_buffer.get_sound_alerts_enabled():
+                            send_notification("BabyPing", "Sound detected")
+                        event_log.log_event("sound")
+                        if args.max_events > 0:
+                            event_log.prune(max_events=args.max_events)
 
             _, jpeg = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             frame_buffer.update(jpeg.tobytes())
@@ -346,6 +461,8 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        if audio_monitor is not None:
+            audio_monitor.stop()
         cap.release()
         cv2.destroyAllWindows()
         print("BabyPing stopped.")

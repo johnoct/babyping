@@ -101,6 +101,17 @@ The interface shows:
 
 On iPhone, tap Share > Add to Home Screen to run it as a full-screen app.
 
+## Remote Access via Tailscale
+
+Access BabyPing from anywhere (not just your local Wi-Fi) using [Tailscale](https://tailscale.com):
+
+1. Install Tailscale on the Mac running BabyPing and on your phone/laptop
+2. Sign in on both devices with the same Tailscale account
+3. Run `babyping` — if Tailscale is connected, the startup log will show a second URL like `http://100.x.x.x:8080 (Tailscale)`
+4. Open that `100.x.x.x` URL from any device on your Tailscale network
+
+The web UI shows a green **Secure** pill in the header when accessed over Tailscale. No port forwarding or cloud setup required.
+
 ## How It Works
 
 1. Captures video from the camera (built-in or iPhone via Continuity Camera)

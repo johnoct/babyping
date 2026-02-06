@@ -4,15 +4,16 @@ import time
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from babyping import get_tailscale_ip
 
-def create_app(args, frame_buffer=None):
+
+def create_app(args, frame_buffer=None, event_log=None):
     """Create Flask app for the BabyPing web UI."""
     app = Flask(__name__)
 
     @app.route("/")
     def index():
-        snapshots_enabled = args.snapshots
-        return HTML_TEMPLATE.replace("{{SNAPSHOTS_ENABLED}}", "true" if snapshots_enabled else "false")
+        return HTML_TEMPLATE
 
     @app.route("/stream")
     def stream():
@@ -41,6 +42,12 @@ def create_app(args, frame_buffer=None):
             "last_motion_time": last_motion,
             "last_frame_time": last_frame,
             "roi": {"x": roi[0], "y": roi[1], "w": roi[2], "h": roi[3]} if roi else None,
+            "tailscale_ip": get_tailscale_ip(),
+            "audio_level": frame_buffer.get_audio_level(),
+            "last_sound_time": frame_buffer.get_last_sound_time(),
+            "audio_enabled": frame_buffer.get_audio_enabled(),
+            "motion_alerts": frame_buffer.get_motion_alerts_enabled(),
+            "sound_alerts": frame_buffer.get_sound_alerts_enabled(),
         })
 
     @app.route("/roi", methods=["POST"])
@@ -74,6 +81,29 @@ def create_app(args, frame_buffer=None):
     def snapshot_file(filename):
         snapshot_dir = os.path.expanduser(args.snapshot_dir)
         return send_from_directory(snapshot_dir, filename)
+
+    @app.route("/alerts", methods=["POST"])
+    def set_alerts():
+        data = request.get_json(force=True, silent=True) or {}
+        if "motion" in data:
+            frame_buffer.set_motion_alerts_enabled(bool(data["motion"]))
+        if "sound" in data:
+            frame_buffer.set_sound_alerts_enabled(bool(data["sound"]))
+        return jsonify({
+            "motion_alerts": frame_buffer.get_motion_alerts_enabled(),
+            "sound_alerts": frame_buffer.get_sound_alerts_enabled(),
+        })
+
+    @app.route("/events")
+    def events():
+        if event_log is None:
+            return jsonify([])
+        limit = request.args.get("limit", 50, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        event_type = request.args.get("type")
+        if event_type == "all":
+            event_type = None
+        return jsonify(event_log.get_events(limit=limit, offset=offset, event_type=event_type))
 
     return app
 
@@ -285,6 +315,25 @@ html, body {
 .live-pill.delayed .live-dot { background: var(--amber); animation-duration: 1.2s; }
 .live-pill.offline .live-dot { background: #bf616a; animation: none; opacity: 0.6; }
 
+.secure-pill {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px 4px 7px;
+  background: var(--green-soft);
+  border: 1px solid rgba(163,190,140,0.2);
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--green);
+  text-transform: uppercase;
+}
+
+.secure-pill.visible { display: flex; }
+
+.secure-pill svg { width: 11px; height: 11px; }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.75); }
@@ -317,7 +366,7 @@ html, body {
   transition: background 0.4s, border-color 0.4s;
 }
 
-.status-card.primary { flex: 1; }
+.status-card.primary { flex: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 .status-card.motion-on {
   background: rgba(240,198,116,0.07);
@@ -358,6 +407,56 @@ html, body {
 
 .night-icon { font-size: 14px; line-height: 1; }
 
+/* ── Alert toggles ── */
+.alert-toggle {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.alert-toggle.off {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+/* ── Audio VU meter ── */
+.audio-card {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 80px;
+}
+
+.audio-card.visible { display: flex; }
+
+.audio-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  transition: color 0.4s;
+}
+
+.audio-card.sound-on .audio-label { color: var(--amber); }
+
+.vu-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.vu-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--text-muted);
+  transition: width 0.15s ease, background 0.3s ease;
+}
+
 /* ── Audio alert button ── */
 .notify-btn {
   display: flex;
@@ -384,88 +483,210 @@ html, body {
 
 .notify-btn svg { width: 14px; height: 14px; }
 
-/* ── Snapshots panel ── */
-.snap-panel {
-  flex-shrink: 0;
-  background: var(--surface);
-  border-top: 1px solid var(--glass-border);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  max-height: 40px;
-  overflow: hidden;
-  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+/* ── Bottom sheet ── */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0);
+  z-index: 49;
+  pointer-events: none;
+  transition: background 0.4s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.snap-panel.open { max-height: 152px; }
+.sheet-backdrop.visible {
+  pointer-events: auto;
+}
 
-.snap-toggle {
+.sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 92vh;
+  z-index: 50;
+  background: var(--surface);
+  border-radius: 20px 20px 0 0;
+  border-top: 1px solid var(--glass-border);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  transform: translateY(100%);
+  transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 16px;
-  cursor: pointer;
+  flex-direction: column;
+  will-change: transform;
+  touch-action: none;
+}
+
+.sheet.dragging {
+  transition: none !important;
+}
+
+.sheet-handle {
+  flex-shrink: 0;
+  padding: 0 16px;
+  cursor: grab;
   -webkit-tap-highlight-color: transparent;
 }
 
-.snap-label {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-muted);
+.sheet-handle:active { cursor: grabbing; }
+
+.sheet-pill {
+  width: 36px;
+  height: 4px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  margin: 10px auto 8px;
 }
 
-.snap-badge {
-  font-size: 10px;
+.sheet-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.sheet-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+
+.sheet-count {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-muted);
   background: var(--glass-shine);
-  padding: 2px 7px;
-  border-radius: 8px;
-  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 22px;
+  text-align: center;
 }
 
-.snap-chevron {
-  font-size: 10px;
-  color: var(--text-muted);
-  transition: transform 0.3s ease;
-}
-
-.snap-panel.open .snap-chevron { transform: rotate(180deg); }
-
-.snap-scroll {
+.sheet-filters {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
-  padding: 2px 16px 12px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
+  padding: 4px 16px 12px;
 }
 
-.snap-scroll::-webkit-scrollbar { display: none; }
-
-.snap-thumb {
-  flex-shrink: 0;
-  scroll-snap-align: start;
-  width: 90px;
-  height: 68px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
+.sheet-filter {
+  padding: 6px 14px;
+  border-radius: 20px;
   border: 1px solid var(--glass-border);
-  cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
-}
-
-.snap-thumb:active { transform: scale(0.96); opacity: 0.8; }
-
-@media (hover: hover) {
-  .snap-thumb:hover { transform: scale(1.04); border-color: rgba(255,255,255,0.14); }
-}
-
-.snap-empty {
-  padding: 2px 16px 14px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: inherit;
   font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.sheet-filter.active {
+  background: var(--amber-soft);
+  border-color: rgba(240, 198, 116, 0.3);
+  color: var(--amber);
+}
+
+.sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px calc(16px + var(--sab));
+  overscroll-behavior: contain;
+}
+
+.sheet-body::-webkit-scrollbar { width: 4px; }
+.sheet-body::-webkit-scrollbar-track { background: transparent; }
+.sheet-body::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+
+/* ── Event cards ── */
+.evt-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: border-color 0.3s;
+}
+
+.evt-card.motion { border-left: 3px solid var(--amber); }
+.evt-card.sound { border-left: 3px solid #81a1c1; }
+
+.evt-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+
+.evt-icon.motion {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.evt-icon.sound {
+  background: rgba(129, 161, 193, 0.1);
+  color: #81a1c1;
+}
+
+.evt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.evt-type {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.evt-detail {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.evt-time {
+  font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.evt-snap {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.evt-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.evt-empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.4;
 }
 
 /* ── ROI selection ── */
@@ -610,6 +831,10 @@ html, body {
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
         </button>
         <span class="clock" id="clock"></span>
+        <div class="secure-pill" id="secure-pill">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z"/></svg>
+          <span>Secure</span>
+        </div>
         <div class="live-pill">
           <span class="live-dot"></span>
           <span id="live-label">Live</span>
@@ -619,13 +844,23 @@ html, body {
 
     <div class="status-bar">
       <div class="status-row">
-        <div class="status-card primary" id="motion-card">
+        <div class="status-card primary" id="motion-card" onclick="toggleSheet()">
           <div class="status-dot"></div>
           <span class="status-text" id="motion-text">No motion</span>
+        </div>
+        <div class="status-card tag audio-card" id="audio-card">
+          <span class="audio-label" id="audio-label">Audio</span>
+          <div class="vu-track"><div class="vu-fill" id="vu-fill"></div></div>
         </div>
         <div class="status-card tag" id="sens-card"></div>
         <div class="status-card tag" id="night-card" style="display:none">
           <span class="night-icon">&#9790;</span>
+        </div>
+        <div class="status-card tag alert-toggle" id="motion-alert-toggle" onclick="toggleMotionAlerts()">
+          <span id="motion-alert-label">Motion</span>
+        </div>
+        <div class="status-card tag alert-toggle" id="sound-alert-toggle" onclick="toggleSoundAlerts()" style="display:none">
+          <span id="sound-alert-label">Sound</span>
         </div>
         <div class="status-card tag roi-btn" id="roi-btn" onclick="enterRoiMode()">
           <span class="roi-label">ROI</span>
@@ -643,18 +878,26 @@ html, body {
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Snapshots -->
-  <div class="snap-panel" id="snap-panel">
-    <div class="snap-toggle" id="snap-toggle">
-      <div>
-        <span class="snap-label">Recent Events</span>
-        <span class="snap-badge" id="snap-count"></span>
-      </div>
-      <span class="snap-chevron">&#9660;</span>
+<!-- Sheet backdrop -->
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+
+<!-- Events bottom sheet -->
+<div class="sheet" id="sheet">
+  <div class="sheet-handle" id="sheet-handle">
+    <div class="sheet-pill"></div>
+    <div class="sheet-header">
+      <span class="sheet-title">Events</span>
+      <span class="sheet-count" id="sheet-count">0</span>
     </div>
-    <div class="snap-scroll" id="snap-scroll"></div>
   </div>
+  <div class="sheet-filters" id="sheet-filters">
+    <button class="sheet-filter active" data-type="all">All</button>
+    <button class="sheet-filter" data-type="motion">Motion</button>
+    <button class="sheet-filter" data-type="sound">Sound</button>
+  </div>
+  <div class="sheet-body" id="sheet-body"></div>
 </div>
 
 <!-- Image viewer -->
@@ -664,7 +907,6 @@ html, body {
 </div>
 
 <script>
-const snapshotsEnabled = {{SNAPSHOTS_ENABLED}};
 const streamWrap = document.getElementById('stream-wrap');
 const motionCard = document.getElementById('motion-card');
 const motionText = document.getElementById('motion-text');
@@ -672,22 +914,47 @@ const sensCard = document.getElementById('sens-card');
 const nightCard = document.getElementById('night-card');
 const clockEl = document.getElementById('clock');
 const loadingEl = document.getElementById('loading');
-const snapPanel = document.getElementById('snap-panel');
-const snapScroll = document.getElementById('snap-scroll');
-const snapCount = document.getElementById('snap-count');
 const viewer = document.getElementById('viewer');
 const viewerImg = document.getElementById('viewer-img');
 const livePill = document.querySelector('.live-pill');
 const liveLabel = document.getElementById('live-label');
 const streamImg = streamWrap.querySelector('img');
+const securePill = document.getElementById('secure-pill');
+const audioCard = document.getElementById('audio-card');
+const audioLabel = document.getElementById('audio-label');
+const vuFill = document.getElementById('vu-fill');
+const motionAlertToggle = document.getElementById('motion-alert-toggle');
+const soundAlertToggle = document.getElementById('sound-alert-toggle');
 
 /* ROI state (initialized early for status polling) */
 var currentRoi = null;
+
+/* Alert toggle state */
+var motionAlertsEnabled = true;
+var soundAlertsEnabled = true;
+
+function updateAlertToggles() {
+  motionAlertToggle.classList.toggle('off', !motionAlertsEnabled);
+  soundAlertToggle.classList.toggle('off', !soundAlertsEnabled);
+}
+
+function toggleMotionAlerts() {
+  motionAlertsEnabled = !motionAlertsEnabled;
+  updateAlertToggles();
+  fetch('/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motion: motionAlertsEnabled }) });
+}
+
+function toggleSoundAlerts() {
+  soundAlertsEnabled = !soundAlertsEnabled;
+  updateAlertToggles();
+  fetch('/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sound: soundAlertsEnabled }) });
+}
 
 /* Audio alert state (initialized early for status polling) */
 var audioCtx = null;
 var audioEnabled = false;
 var lastMotionAlerted = 0;
+var lastSoundAlerted = 0;
 var statusInitialized = false;
 var notifyBtn = document.getElementById('notify-btn');
 
@@ -782,6 +1049,13 @@ function updateStatus() {
     currentRoi = data.roi;
     updateRoiBtn();
 
+    /* Tailscale secure indicator */
+    if (data.tailscale_ip) {
+      securePill.classList.add('visible');
+    } else {
+      securePill.classList.remove('visible');
+    }
+
     /* Motion status */
     if (data.last_motion_time) {
       const ago = Math.round(Date.now() / 1000 - data.last_motion_time);
@@ -805,38 +1079,65 @@ function updateStatus() {
       motionText.textContent = 'No motion';
     }
 
-    /* Audio alert on new motion events */
+    /* Audio level VU meter */
+    if (data.audio_enabled) {
+      audioCard.classList.add('visible');
+      var level = data.audio_level || 0;
+      var pct = Math.min(level * 100 / 0.5, 100);
+      vuFill.style.width = pct + '%';
+      if (pct < 10) { vuFill.style.background = 'var(--text-muted)'; }
+      else if (pct < 40) { vuFill.style.background = 'var(--green)'; }
+      else if (pct < 70) { vuFill.style.background = 'var(--amber)'; }
+      else { vuFill.style.background = '#bf616a'; }
+
+      if (data.last_sound_time) {
+        var soundAgo = Math.round(Date.now() / 1000 - data.last_sound_time);
+        if (soundAgo < 5) {
+          audioCard.classList.add('sound-on');
+          audioLabel.textContent = 'Sound now';
+        } else if (soundAgo < 60) {
+          audioCard.classList.remove('sound-on');
+          audioLabel.textContent = 'Sound ' + soundAgo + 's ago';
+        } else {
+          audioCard.classList.remove('sound-on');
+          audioLabel.textContent = 'Audio';
+        }
+      } else {
+        audioCard.classList.remove('sound-on');
+        audioLabel.textContent = 'Audio';
+      }
+    } else {
+      audioCard.classList.remove('visible');
+    }
+
+    /* Sync alert toggle state */
+    motionAlertsEnabled = data.motion_alerts;
+    soundAlertsEnabled = data.sound_alerts;
+    updateAlertToggles();
+    if (data.audio_enabled) { soundAlertToggle.style.display = ''; }
+    else { soundAlertToggle.style.display = 'none'; }
+
+    /* Audio alert on new motion or sound events */
     if (!statusInitialized) {
       lastMotionAlerted = data.last_motion_time || 0;
+      lastSoundAlerted = data.last_sound_time || 0;
       statusInitialized = true;
-    } else if (audioEnabled && data.last_motion_time && data.last_motion_time > lastMotionAlerted) {
-      lastMotionAlerted = data.last_motion_time;
-      ensureAudio();
-      playAlertSound();
-      try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+    } else if (audioEnabled) {
+      if (data.last_motion_time && data.last_motion_time > lastMotionAlerted) {
+        lastMotionAlerted = data.last_motion_time;
+        ensureAudio();
+        playAlertSound();
+        try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+      }
+      if (data.last_sound_time && data.last_sound_time > lastSoundAlerted) {
+        lastSoundAlerted = data.last_sound_time;
+        ensureAudio();
+        playAlertSound();
+        try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch(e) {}
+      }
     }
   }).catch(function() {});
 }
-
-/* Snapshots */
-function updateSnapshots() {
-  if (!snapshotsEnabled) { snapPanel.style.display = 'none'; return; }
-  fetch('/snapshots').then(function(r) { return r.json(); }).then(function(files) {
-    snapCount.textContent = files.length || '';
-    if (files.length === 0) {
-      snapScroll.innerHTML = '<div class="snap-empty">No events yet</div>';
-      return;
-    }
-    snapScroll.innerHTML = files.map(function(f) {
-      return '<img class="snap-thumb" src="/snapshots/' + f + '" alt="' + f + '" onclick="openViewer(this.src)">';
-    }).join('');
-  }).catch(function() {});
-}
-
-/* Drawer toggle */
-document.getElementById('snap-toggle').addEventListener('click', function() {
-  snapPanel.classList.toggle('open');
-});
 
 /* Image viewer */
 function openViewer(src) {
@@ -850,9 +1151,240 @@ function closeViewer() {
 
 /* Init */
 updateStatus();
-updateSnapshots();
 setInterval(updateStatus, 3000);
-setInterval(updateSnapshots, 10000);
+
+/* ── Bottom sheet ── */
+var sheet = document.getElementById('sheet');
+var sheetBackdrop = document.getElementById('sheet-backdrop');
+var sheetBody = document.getElementById('sheet-body');
+var sheetCount = document.getElementById('sheet-count');
+var sheetFilters = document.getElementById('sheet-filters');
+
+var sheetHeight = sheet.offsetHeight;
+var SNAP_HIDDEN = sheetHeight;
+var SNAP_HALF = sheetHeight * 0.5;
+var SNAP_FULL = 0;
+var sheetY = SNAP_HIDDEN;
+var sheetOpen = false;
+var sheetFilter = 'all';
+var sheetDragging = false;
+var sheetStartY = 0;
+var sheetStartTranslate = 0;
+var sheetLastMoveY = 0;
+var sheetLastMoveTime = 0;
+var sheetVelocity = 0;
+
+function setSheetY(y) {
+  sheetY = y;
+  sheet.style.transform = 'translateY(' + y + 'px)';
+  /* Interpolate backdrop: 0 at hidden, 0.5 at full */
+  var range = SNAP_HIDDEN - SNAP_FULL;
+  var progress = range > 0 ? 1 - ((y - SNAP_FULL) / range) : 0;
+  progress = Math.max(0, Math.min(1, progress));
+  var opacity = progress * 0.5;
+  sheetBackdrop.style.background = 'rgba(0,0,0,' + opacity + ')';
+  if (progress > 0.02) { sheetBackdrop.classList.add('visible'); }
+  else { sheetBackdrop.classList.remove('visible'); }
+  sheetOpen = y < SNAP_HIDDEN;
+}
+
+function snapSheet(target) {
+  sheet.classList.remove('dragging');
+  setSheetY(target);
+  if (target >= SNAP_HIDDEN) { loadSheetEvents(); }
+}
+
+function toggleSheet() {
+  if (sheetOpen) {
+    snapSheet(SNAP_HIDDEN);
+  } else {
+    loadSheetEvents();
+    snapSheet(SNAP_HALF);
+  }
+}
+
+function recalcSnaps() {
+  sheetHeight = sheet.offsetHeight;
+  SNAP_HIDDEN = sheetHeight;
+  SNAP_HALF = sheetHeight * 0.5;
+  SNAP_FULL = 0;
+}
+
+function onSheetPointerDown(e) {
+  /* Allow scrolling inside sheet-body when expanded */
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+
+  var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  sheetDragging = true;
+  sheetStartY = clientY;
+  sheetStartTranslate = sheetY;
+  sheetLastMoveY = clientY;
+  sheetLastMoveTime = Date.now();
+  sheetVelocity = 0;
+  sheet.classList.add('dragging');
+}
+
+function onSheetPointerMove(e) {
+  if (!sheetDragging) return;
+  var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  var deltaY = clientY - sheetStartY;
+  var newY = sheetStartTranslate + deltaY;
+
+  /* Rubber band past top */
+  if (newY < SNAP_FULL) {
+    newY = SNAP_FULL + (newY - SNAP_FULL) * 0.3;
+  }
+  /* Clamp at hidden */
+  if (newY > SNAP_HIDDEN) { newY = SNAP_HIDDEN; }
+
+  setSheetY(newY);
+
+  /* Track velocity */
+  var now = Date.now();
+  var dt = now - sheetLastMoveTime;
+  if (dt > 0) {
+    sheetVelocity = (clientY - sheetLastMoveY) / dt * 1000;
+  }
+  sheetLastMoveY = clientY;
+  sheetLastMoveTime = now;
+
+  e.preventDefault();
+}
+
+function onSheetPointerUp() {
+  if (!sheetDragging) return;
+  sheetDragging = false;
+
+  /* Fast swipe detection */
+  if (sheetVelocity < -800) { snapSheet(SNAP_FULL); return; }
+  if (sheetVelocity > 800) { snapSheet(SNAP_HIDDEN); return; }
+
+  /* Snap to nearest */
+  var snaps = [SNAP_FULL, SNAP_HALF, SNAP_HIDDEN];
+  var closest = snaps[0];
+  var minDist = Math.abs(sheetY - snaps[0]);
+  for (var i = 1; i < snaps.length; i++) {
+    var d = Math.abs(sheetY - snaps[i]);
+    if (d < minDist) { minDist = d; closest = snaps[i]; }
+  }
+  snapSheet(closest);
+}
+
+/* Touch events on sheet */
+sheet.addEventListener('touchstart', function(e) {
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+  onSheetPointerDown(e);
+}, { passive: false });
+sheet.addEventListener('touchmove', function(e) {
+  if (!sheetDragging) return;
+  onSheetPointerMove(e);
+}, { passive: false });
+sheet.addEventListener('touchend', onSheetPointerUp);
+
+/* Mouse events on sheet */
+sheet.addEventListener('mousedown', function(e) {
+  if (sheetBody.contains(e.target) && sheetY <= SNAP_HALF && sheetBody.scrollTop > 0) return;
+  onSheetPointerDown(e);
+});
+document.addEventListener('mousemove', function(e) {
+  if (!sheetDragging) return;
+  onSheetPointerMove(e);
+});
+document.addEventListener('mouseup', onSheetPointerUp);
+
+/* Backdrop tap to dismiss */
+sheetBackdrop.addEventListener('click', function() { snapSheet(SNAP_HIDDEN); });
+
+/* Recalculate on resize */
+window.addEventListener('resize', function() {
+  recalcSnaps();
+  if (sheetOpen) { snapSheet(SNAP_HALF); }
+});
+
+/* Handle sheet-body scroll: only drag sheet when scrolled to top and swiping down */
+sheetBody.addEventListener('touchstart', function(e) {
+  if (sheetY > SNAP_HALF) return;
+  if (sheetBody.scrollTop <= 0) { return; }
+  e.stopPropagation();
+}, { passive: true });
+
+sheetBody.addEventListener('touchmove', function(e) {
+  if (sheetDragging) return;
+  if (sheetBody.scrollTop <= 0 && sheetY <= SNAP_HALF) { return; }
+  e.stopPropagation();
+}, { passive: true });
+
+/* Filter buttons */
+sheetFilters.addEventListener('click', function(e) {
+  var btn = e.target.closest('.sheet-filter');
+  if (!btn) return;
+  sheetFilter = btn.getAttribute('data-type');
+  var all = sheetFilters.querySelectorAll('.sheet-filter');
+  all.forEach(function(b) { b.classList.toggle('active', b === btn); });
+  loadSheetEvents();
+});
+
+/* Event loading */
+function formatEvtTime(ts) {
+  var d = new Date(ts * 1000);
+  var now = Date.now();
+  var ago = Math.round((now - d.getTime()) / 1000);
+  if (ago < 5) return 'Just now';
+  if (ago < 60) return ago + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+  var h = d.getHours();
+  var m = String(d.getMinutes()).padStart(2, '0');
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  var month = d.toLocaleString('default', { month: 'short' });
+  return month + ' ' + d.getDate() + ', ' + ((h % 12) || 12) + ':' + m + ' ' + ampm;
+}
+
+function renderSheetEvents(events) {
+  if (events.length === 0) {
+    sheetBody.innerHTML = '<div class="evt-empty"><div class="evt-empty-icon">&#9203;</div>No events yet</div>';
+    sheetCount.textContent = '0';
+    return;
+  }
+  sheetCount.textContent = events.length;
+  var html = '';
+  events.forEach(function(e) {
+    var isMotion = e.type === 'motion';
+    var icon = isMotion ? '&#128065;' : '&#128266;';
+    var label = isMotion ? 'Motion Detected' : 'Sound Detected';
+    var detail = '';
+    if (isMotion && e.area !== null && e.area !== undefined) {
+      detail = 'Area: ' + Math.round(e.area) + 'px&#178;';
+    } else if (!isMotion && e.audio_level !== null && e.audio_level !== undefined) {
+      detail = 'Level: ' + (e.audio_level * 100).toFixed(0) + '%';
+    }
+    var snap = '';
+    if (e.snapshot) {
+      snap = '<img class="evt-snap" src="/snapshots/' + e.snapshot + '" alt="snap" onclick="openViewer(this.src)">';
+    }
+    html += '<div class="evt-card ' + e.type + '">' +
+      '<div class="evt-icon ' + e.type + '">' + icon + '</div>' +
+      '<div class="evt-body">' +
+        '<div class="evt-type">' + label + '</div>' +
+        (detail ? '<div class="evt-detail">' + detail + '</div>' : '') +
+      '</div>' +
+      '<span class="evt-time">' + formatEvtTime(e.timestamp) + '</span>' +
+      snap +
+    '</div>';
+  });
+  sheetBody.innerHTML = html;
+}
+
+function loadSheetEvents() {
+  var url = '/events?limit=50';
+  if (sheetFilter !== 'all') { url += '&type=' + sheetFilter; }
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    renderSheetEvents(data);
+  }).catch(function() {});
+}
+
+loadSheetEvents();
+setInterval(loadSheetEvents, 5000);
 
 /* ── ROI selection ── */
 const roiOverlay = document.getElementById('roi-overlay');
@@ -1030,3 +1562,5 @@ window.addEventListener('resize', function() { if (roiMode) exitRoiMode(); });
 </script>
 </body>
 </html>"""
+
+
