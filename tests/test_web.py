@@ -147,3 +147,19 @@ class TestWebROI:
         assert b"roi-btn" in resp.data
         assert b"roi-overlay" in resp.data
         assert b"roi-canvas" in resp.data
+
+
+class TestWebAudioAlerts:
+    def test_index_includes_notify_button(self, client):
+        resp = client.get("/")
+        assert b"notify-btn" in resp.data
+
+    def test_index_includes_audio_scripts(self, client):
+        resp = client.get("/")
+        assert b"toggleAudio" in resp.data
+        assert b"playAlertSound" in resp.data
+        assert b"AudioContext" in resp.data
+
+    def test_index_includes_vibration_api(self, client):
+        resp = client.get("/")
+        assert b"navigator.vibrate" in resp.data
