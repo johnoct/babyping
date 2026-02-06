@@ -95,9 +95,11 @@ def detect_motion(prev_gray, curr_gray, threshold):
 
 
 def send_notification(title, message):
+    safe_title = str(title).replace('\\', '\\\\').replace('"', '\\"')
+    safe_message = str(message).replace('\\', '\\\\').replace('"', '\\"')
     subprocess.run([
         "osascript", "-e",
-        f'display notification "{message}" with title "{title}" sound name "Glass"'
+        f'display notification "{safe_message}" with title "{safe_title}" sound name "Glass"'
     ], capture_output=True)
 
 
@@ -123,12 +125,14 @@ def save_snapshot(frame, snapshot_dir="~/.babyping/events", max_snapshots=100):
     return filepath
 
 
+_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
 def apply_night_mode(frame):
     """Enhance frame brightness/contrast for dark rooms using CLAHE."""
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
+    l = _clahe.apply(l)
     enhanced = cv2.merge([l, a, b])
     return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
@@ -172,14 +176,14 @@ def throttle_fps(frame_start, target_fps):
 
 def get_local_ip():
     """Get the local network IP address."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def select_roi(cap):
@@ -200,9 +204,11 @@ def try_open_camera(index):
     cap = cv2.VideoCapture(index)
     if cap.isOpened():
         return cap
+    cap.release()
     cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
     if cap.isOpened():
         return cap
+    cap.release()
     return None
 
 
@@ -294,6 +300,8 @@ def main():
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
+            motion = False
+            area = 0
             if prev_gray is not None:
                 prev_cropped = crop_to_roi(prev_gray, roi)
                 curr_cropped = crop_to_roi(gray, roi)
@@ -303,20 +311,6 @@ def main():
                     full_contours = offset_contours(contours, roi)
                     cv2.drawContours(frame, full_contours, -1, (0, 0, 255), 2)
 
-                    now = time.time()
-                    if now - last_alert_time >= args.cooldown:
-                        timestamp = datetime.now().isoformat(timespec="seconds")
-                        snap_msg = ""
-                        if args.snapshots:
-                            snap_frame = apply_night_mode(frame) if args.night_mode else frame
-                            snap_path = save_snapshot(snap_frame, args.snapshot_dir, args.max_snapshots)
-                            if snap_path:
-                                snap_msg = f" → {snap_path}"
-                        print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
-                        send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
-                        last_alert_time = now
-                        frame_buffer.set_last_motion_time(now)
-
             prev_gray = gray
 
             if roi:
@@ -324,7 +318,22 @@ def main():
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 1)
 
             display_frame = apply_night_mode(frame) if args.night_mode else frame
-            _, jpeg = cv2.imencode('.jpg', display_frame)
+
+            if motion:
+                now = time.time()
+                if now - last_alert_time >= args.cooldown:
+                    timestamp = datetime.now().isoformat(timespec="seconds")
+                    snap_msg = ""
+                    if args.snapshots:
+                        snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
+                        if snap_path:
+                            snap_msg = f" → {snap_path}"
+                    print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
+                    send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
+                    last_alert_time = now
+                    frame_buffer.set_last_motion_time(now)
+
+            _, jpeg = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             frame_buffer.update(jpeg.tobytes())
             if not args.no_preview:
                 cv2.imshow("BabyPing", display_frame)

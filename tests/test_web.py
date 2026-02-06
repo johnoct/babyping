@@ -14,6 +14,7 @@ class FakeArgs:
     night_mode = False
     snapshots = False
     snapshot_dir = "~/.babyping/events"
+    fps = 10
 
 
 @pytest.fixture
