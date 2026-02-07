@@ -140,8 +140,12 @@ def parse_args():
                         help="Enhance preview brightness for dark rooms")
     parser.add_argument("--roi", default=None,
                         help="Region of interest as x,y,w,h (interactive selection if omitted)")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Web UI bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080,
                         help="Web UI port (default: 8080)")
+    parser.add_argument("--password", default=None,
+                        help="Web UI password (enables HTTP Basic Auth)")
     parser.add_argument("--fps", type=int, default=10,
                         help="Max frames per second, 0=unlimited (default: 10)")
     parser.add_argument("--no-audio", action="store_true",
@@ -175,17 +179,17 @@ def send_notification(title, message):
     ], capture_output=True)
 
 
-def start_web_server(flask_app, port):
+def start_web_server(flask_app, host, port):
     """Create and return a daemon thread running the web server."""
     try:
         from waitress import serve as waitress_serve
         thread = threading.Thread(
-            target=lambda: waitress_serve(flask_app, host="0.0.0.0", port=port, threads=4, _quiet=True),
+            target=lambda: waitress_serve(flask_app, host=host, port=port, threads=4, _quiet=True),
             daemon=True
         )
     except ImportError:
         thread = threading.Thread(
-            target=lambda: flask_app.run(host="0.0.0.0", port=port, threaded=True),
+            target=lambda: flask_app.run(host=host, port=port, threaded=True),
             daemon=True
         )
     return thread
@@ -383,13 +387,23 @@ def main():
 
     from web import create_app
     local_ip = get_local_ip()
-    print(f"  Web UI:       http://{local_ip}:{args.port}")
+    if args.host == "127.0.0.1":
+        print(f"  Web UI:       http://127.0.0.1:{args.port} (localhost only)")
+    else:
+        print(f"  Web UI:       http://{local_ip}:{args.port}")
     tailscale_ip = get_tailscale_ip()
     if tailscale_ip:
         print(f"  Web UI:       http://{tailscale_ip}:{args.port} (Tailscale)")
 
+    if args.host == "0.0.0.0" and not args.password:
+        print("  WARNING:      Binding to 0.0.0.0 without --password exposes the web UI to the network without auth")
+    if args.password:
+        print(f"  Auth:         HTTP Basic Auth enabled")
+    else:
+        print(f"  Auth:         off")
+
     flask_app = create_app(args, frame_buffer, event_log=event_log)
-    web_thread = start_web_server(flask_app, args.port)
+    web_thread = start_web_server(flask_app, args.host, args.port)
     web_thread.start()
     print()
 
@@ -484,7 +498,7 @@ def main():
             if not web_thread.is_alive():
                 print("Warning: Web server stopped — restarting")
                 send_notification("BabyPing", "Web server crashed — restarting")
-                web_thread = start_web_server(flask_app, args.port)
+                web_thread = start_web_server(flask_app, args.host, args.port)
                 web_thread.start()
 
             # Sync audio state to frame buffer

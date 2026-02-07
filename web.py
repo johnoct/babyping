@@ -11,6 +11,17 @@ def create_app(args, frame_buffer=None, event_log=None):
     """Create Flask app for the BabyPing web UI."""
     app = Flask(__name__)
 
+    password = getattr(args, 'password', None)
+    if password:
+        @app.before_request
+        def check_auth():
+            auth = request.authorization
+            if not auth or auth.password != password:
+                return Response(
+                    'Authentication required', 401,
+                    {'WWW-Authenticate': 'Basic realm="BabyPing"'}
+                )
+
     @app.route("/")
     def index():
         return HTML_TEMPLATE
