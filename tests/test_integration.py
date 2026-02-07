@@ -33,7 +33,8 @@ def make_frame(value=128, width=320, height=240):
 def make_fake_args(**overrides):
     """Return an argparse.Namespace with sane test defaults."""
     defaults = dict(
-        camera=0,
+        camera="0",
+        rtsp_transport="tcp",
         sensitivity="medium",
         cooldown=30,
         no_preview=True,
@@ -100,7 +101,7 @@ class MainRunner:
 
         self.mock_notification = None
         self.mock_start_web = None
-        self.mock_open_camera = None
+        self.mock_open_camera_source = None
         self.mock_destroyAllWindows = None
         self.mock_web_thread = None
         self.cap = None
@@ -122,7 +123,7 @@ class MainRunner:
 
         targets = {
             "parse_args": "babyping.parse_args",
-            "open_camera": "babyping.open_camera",
+            "open_camera_source": "babyping.open_camera_source",
             "send_notification": "babyping.send_notification",
             "start_web_server": "babyping.start_web_server",
             "imshow": "cv2.imshow",
@@ -140,7 +141,7 @@ class MainRunner:
         mocks = {name: p.start() for name, p in self._patches.items()}
 
         mocks["parse_args"].return_value = self.args
-        mocks["open_camera"].return_value = self.cap
+        mocks["open_camera_source"].return_value = self.cap
         mocks["send_notification"].return_value = None
         mocks["start_web_server"].return_value = self.mock_web_thread
         mocks["get_local_ip"].return_value = "127.0.0.1"
@@ -151,7 +152,7 @@ class MainRunner:
 
         self.mock_notification = mocks["send_notification"]
         self.mock_start_web = mocks["start_web_server"]
-        self.mock_open_camera = mocks["open_camera"]
+        self.mock_open_camera_source = mocks["open_camera_source"]
         self.mock_destroyAllWindows = mocks["destroyAllWindows"]
         self._mocks = mocks
 

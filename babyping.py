@@ -130,9 +130,106 @@ SENSITIVITY_THRESHOLDS = {
 }
 
 
+def mask_credentials(url):
+    """Mask username:password in a URL for safe logging."""
+    return re.sub(r'(://)[^@]+@', r'\1***:***@', url)
+
+
+class ThreadedVideoCapture:
+    """Thread-safe video capture that reads frames in a background thread.
+
+    Prevents RTSP/network stream lag by continuously reading frames and
+    always providing the latest one to the caller.
+    """
+
+    def __init__(self, source, rtsp_transport="tcp"):
+        if isinstance(source, str) and source.startswith("rtsp://"):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{rtsp_transport}"
+        self._cap = cv2.VideoCapture(source)
+        self._lock = threading.Lock()
+        self._ret = False
+        self._frame = None
+        self._stopped = False
+        self._last_frame_time = None
+        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread.start()
+
+    def _reader(self):
+        while not self._stopped:
+            ret, frame = self._cap.read()
+            with self._lock:
+                self._ret = ret
+                self._frame = frame
+                if ret:
+                    self._last_frame_time = time.monotonic()
+
+    def read(self):
+        with self._lock:
+            frame = self._frame.copy() if self._frame is not None else None
+            return self._ret, frame
+
+    def isOpened(self):
+        return self._cap.isOpened()
+
+    def release(self):
+        self._stopped = True
+        self._thread.join(timeout=2.0)
+        self._cap.release()
+
+    def get(self, prop):
+        return self._cap.get(prop)
+
+    def set(self, prop, value):
+        return self._cap.set(prop, value)
+
+    def is_healthy(self, timeout=10.0):
+        with self._lock:
+            if self._last_frame_time is None:
+                return False
+            return (time.monotonic() - self._last_frame_time) < timeout
+
+
+def _is_network_source(source):
+    """Check if a camera source string is a network URL."""
+    return isinstance(source, str) and (
+        source.startswith("rtsp://") or source.startswith("http://") or source.startswith("https://")
+    )
+
+
+def open_camera_source(source, rtsp_transport="tcp"):
+    """Open a camera source. Returns VideoCapture (local) or ThreadedVideoCapture (network).
+
+    Args:
+        source: Camera index as string ("0") or URL ("rtsp://...")
+        rtsp_transport: "tcp" or "udp" for RTSP streams
+    """
+    if _is_network_source(source):
+        cap = ThreadedVideoCapture(source, rtsp_transport=rtsp_transport)
+        if not cap.isOpened():
+            cap.release()
+            print(f"Error: Could not open camera at {mask_credentials(source)}")
+            sys.exit(1)
+        return cap
+
+    try:
+        index = int(source)
+    except ValueError:
+        print(f"Error: Invalid camera source: {source}")
+        sys.exit(1)
+
+    cap = try_open_camera(index)
+    if cap is None:
+        print(f"Error: Could not open camera at index {index}")
+        sys.exit(1)
+    return cap
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="BabyPing — lightweight baby monitor with motion detection")
-    parser.add_argument("--camera", type=int, default=0, help="Camera index (default: 0)")
+    parser.add_argument("--camera", type=str, default="0",
+                        help="Camera index or RTSP/HTTP URL (default: 0)")
+    parser.add_argument("--rtsp-transport", choices=["tcp", "udp"], default="tcp",
+                        help="RTSP transport protocol (default: tcp)")
     parser.add_argument("--sensitivity", choices=["low", "medium", "high"], default="medium",
                         help="Motion sensitivity (default: medium)")
     parser.add_argument("--cooldown", type=int, default=30, help="Seconds between notifications (default: 30)")
@@ -339,24 +436,26 @@ def try_open_camera(index):
     return None
 
 
-def reconnect_camera(index, max_attempts=10, base_delay=2.0):
+def reconnect_camera(source, max_attempts=10, base_delay=2.0, rtsp_transport="tcp"):
     """Retry opening camera with exponential backoff. Returns cap or None."""
     for attempt in range(max_attempts):
         delay = min(base_delay * (2 ** attempt), 60)
         print(f"  Reconnect attempt {attempt + 1}/{max_attempts} (waiting {delay:.0f}s)...")
         time.sleep(delay)
-        cap = try_open_camera(index)
-        if cap is not None:
-            return cap
+        if _is_network_source(source):
+            cap = ThreadedVideoCapture(source, rtsp_transport=rtsp_transport)
+            if cap.isOpened():
+                return cap
+            cap.release()
+        else:
+            try:
+                index = int(source)
+            except ValueError:
+                return None
+            cap = try_open_camera(index)
+            if cap is not None:
+                return cap
     return None
-
-
-def open_camera(index):
-    cap = try_open_camera(index)
-    if cap is None:
-        print(f"Error: Could not open camera at index {index}")
-        sys.exit(1)
-    return cap
 
 
 def main():
@@ -364,11 +463,12 @@ def main():
     frame_buffer.set_sensitivity(args.sensitivity)
     frame_buffer.set_fps(args.fps)
     threshold = SENSITIVITY_THRESHOLDS[args.sensitivity]
-    print(f"BabyPing starting — camera={args.camera}, sensitivity={args.sensitivity} ({threshold}px²), cooldown={args.cooldown}s")
+    camera_label = mask_credentials(args.camera) if _is_network_source(args.camera) else args.camera
+    print(f"BabyPing starting — camera={camera_label}, sensitivity={args.sensitivity} ({threshold}px²), cooldown={args.cooldown}s")
 
-    cap = open_camera(args.camera)
+    cap = open_camera_source(args.camera, rtsp_transport=args.rtsp_transport)
     print("Camera opened. Press 'q' to quit.")
-    print(f"  Camera index: {args.camera}")
+    print(f"  Camera:       {camera_label}")
     print(f"  Sensitivity:  {args.sensitivity} ({threshold}px² threshold)")
     print(f"  Cooldown:     {args.cooldown}s")
     print(f"  Preview:      {'off' if args.no_preview else 'on'}")
@@ -444,7 +544,7 @@ def main():
                     print(f"Camera lost after {consecutive_failures} dropped frames. Reconnecting...")
                     send_notification("BabyPing", "Camera disconnected — reconnecting...")
                     cap.release()
-                    cap = reconnect_camera(args.camera)
+                    cap = reconnect_camera(args.camera, rtsp_transport=args.rtsp_transport)
                     if cap is None:
                         print("Error: Could not reconnect to camera. Exiting.")
                         send_notification("BabyPing", "Camera reconnect failed — stopping")
