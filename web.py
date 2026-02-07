@@ -829,6 +829,41 @@ html, body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
+
+/* ── Fullscreen toggle button ── */
+.fs-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.3s, border-color 0.3s, background 0.3s;
+}
+
+.fs-btn.active {
+  color: var(--amber);
+  border-color: rgba(240,198,116,0.3);
+  background: var(--amber-soft);
+}
+
+.fs-btn svg { width: 14px; height: 14px; }
+
+/* ── Fullscreen mode ── */
+.stream-wrap::backdrop { background: #000; }
+.stream-wrap:fullscreen { background: #000; }
+.stream-wrap:-webkit-full-screen { background: #000; }
+.stream-wrap:fullscreen .header { display: none; }
+.stream-wrap:fullscreen .status-bar { display: none; }
+.stream-wrap:-webkit-full-screen .header { display: none; }
+.stream-wrap:-webkit-full-screen .status-bar { display: none; }
 </style>
 </head>
 <body>
@@ -846,6 +881,9 @@ html, body {
     <header class="header">
       <div class="logo">BabyPing</div>
       <div class="header-right">
+        <button class="fs-btn" id="fs-btn" onclick="toggleFullscreen()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+        </button>
         <button class="notify-btn" id="notify-btn" onclick="toggleAudio()">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
         </button>
@@ -1603,6 +1641,50 @@ function updateRoiBtn() {
 }
 
 window.addEventListener('resize', function() { if (roiMode) exitRoiMode(); });
+
+/* ── Fullscreen toggle ── */
+var fsBtn = document.getElementById('fs-btn');
+
+function toggleFullscreen() {
+  var el = document.getElementById('stream-wrap');
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (document.exitFullscreen) { document.exitFullscreen(); }
+    else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+  } else {
+    if (el.requestFullscreen) { el.requestFullscreen(); }
+    else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); }
+  }
+}
+
+function updateFsBtn() {
+  var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (isFs) { fsBtn.classList.add('active'); }
+  else { fsBtn.classList.remove('active'); }
+}
+
+document.addEventListener('fullscreenchange', updateFsBtn);
+document.addEventListener('webkitfullscreenchange', updateFsBtn);
+
+/* Double-tap to toggle fullscreen */
+var lastTapTime = 0;
+streamWrap.addEventListener('dblclick', function(e) {
+  if (roiMode || sheetOpen) return;
+  toggleFullscreen();
+});
+
+var fsTapTimer = null;
+streamWrap.addEventListener('touchend', function(e) {
+  if (roiMode || sheetOpen) return;
+  var now = Date.now();
+  if (now - lastTapTime < 350) {
+    clearTimeout(fsTapTimer);
+    lastTapTime = 0;
+    toggleFullscreen();
+  } else {
+    lastTapTime = now;
+    fsTapTimer = setTimeout(function() { lastTapTime = 0; }, 350);
+  }
+});
 </script>
 </body>
 </html>"""
