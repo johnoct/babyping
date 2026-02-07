@@ -12,7 +12,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock, patch
 
-from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, get_tailscale_ip, _tailscale_cache, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, get_tailscale_ip, _is_network_source, _tailscale_cache, mask_credentials, offset_contours, open_camera_source, parse_args, parse_roi_string, reconnect_camera, save_snapshot, ThreadedVideoCapture, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -64,7 +64,7 @@ class TestParseArgs:
     def test_defaults(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["babyping"])
         args = parse_args()
-        assert args.camera == 0
+        assert args.camera == "0"
         assert args.sensitivity == "medium"
         assert args.cooldown == 30
         assert args.no_preview is False
@@ -75,7 +75,7 @@ class TestParseArgs:
             "--cooldown", "10", "--no-preview",
         ])
         args = parse_args()
-        assert args.camera == 2
+        assert args.camera == "2"
         assert args.sensitivity == "high"
         assert args.cooldown == 10
         assert args.no_preview is True
@@ -747,4 +747,242 @@ class TestSaveSnapshotDiskError:
         blocker = tmp_path / "blocker"
         blocker.write_text("not a dir")
         result = save_snapshot(frame, snapshot_dir=str(blocker / "subdir"))
+        assert result is None
+
+
+# --- mask_credentials tests ---
+
+class TestMaskCredentials:
+    def test_masks_user_and_password(self):
+        url = "rtsp://admin:secret@192.168.1.100:554/stream"
+        assert mask_credentials(url) == "rtsp://***:***@192.168.1.100:554/stream"
+
+    def test_no_credentials_unchanged(self):
+        url = "rtsp://192.168.1.100:554/stream"
+        assert mask_credentials(url) == "rtsp://192.168.1.100:554/stream"
+
+    def test_http_url_masked(self):
+        url = "http://user:pass@example.com/mjpeg"
+        assert mask_credentials(url) == "http://***:***@example.com/mjpeg"
+
+    def test_local_camera_index_unchanged(self):
+        assert mask_credentials("0") == "0"
+
+
+# --- _is_network_source tests ---
+
+class TestIsNetworkSource:
+    def test_rtsp_url(self):
+        assert _is_network_source("rtsp://192.168.1.100/stream") is True
+
+    def test_http_url(self):
+        assert _is_network_source("http://192.168.1.100/mjpeg") is True
+
+    def test_https_url(self):
+        assert _is_network_source("https://192.168.1.100/stream") is True
+
+    def test_local_index_string(self):
+        assert _is_network_source("0") is False
+
+    def test_integer(self):
+        assert _is_network_source(0) is False
+
+
+# --- ThreadedVideoCapture tests ---
+
+class TestThreadedVideoCapture:
+    def test_init_starts_reader_thread(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((240, 320, 3), dtype=np.uint8))
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            time.sleep(0.1)  # Let reader thread run
+            assert tvc.isOpened() is True
+            tvc.release()
+
+    def test_read_returns_latest_frame(self):
+        frame = np.full((240, 320, 3), 128, dtype=np.uint8)
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, frame)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            time.sleep(0.1)
+            ret, result = tvc.read()
+            assert ret is True
+            assert result is not None
+            np.testing.assert_array_equal(result, frame)
+            tvc.release()
+
+    def test_read_returns_copy_not_reference(self):
+        frame = np.full((240, 320, 3), 128, dtype=np.uint8)
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, frame)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            time.sleep(0.1)
+            _, frame1 = tvc.read()
+            _, frame2 = tvc.read()
+            assert frame1 is not frame2
+            tvc.release()
+
+    def test_release_stops_thread(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            tvc.release()
+            assert tvc._stopped is True
+
+    def test_is_healthy_true_after_frame(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, frame)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            time.sleep(0.1)
+            assert tvc.is_healthy() is True
+            tvc.release()
+
+    def test_is_healthy_false_initially(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        # Simulate slow connection — no frames yet
+        mock_cap.read.side_effect = lambda: (time.sleep(1) or (False, None))
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            assert tvc.is_healthy() is False
+            tvc.release()
+
+    def test_is_healthy_false_after_timeout(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, frame)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            tvc = ThreadedVideoCapture("rtsp://fake")
+            time.sleep(0.1)
+            # Manually expire
+            with tvc._lock:
+                tvc._last_frame_time = time.monotonic() - 11.0
+            assert tvc.is_healthy() is False
+            tvc.release()
+
+    def test_sets_rtsp_transport_env(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap), \
+             patch.dict(os.environ, {}, clear=False):
+            tvc = ThreadedVideoCapture("rtsp://fake", rtsp_transport="udp")
+            assert os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS") == "rtsp_transport;udp"
+            tvc.release()
+
+
+# --- open_camera_source tests ---
+
+class TestOpenCameraSource:
+    def test_local_camera_index(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        with patch("babyping.try_open_camera", return_value=mock_cap):
+            result = open_camera_source("0")
+        assert result is mock_cap
+
+    def test_local_camera_not_found_exits(self):
+        with patch("babyping.try_open_camera", return_value=None):
+            with pytest.raises(SystemExit):
+                open_camera_source("0")
+
+    def test_invalid_source_exits(self):
+        with pytest.raises(SystemExit):
+            open_camera_source("not_a_number_or_url")
+
+    def test_rtsp_url_returns_threaded_capture(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = open_camera_source("rtsp://192.168.1.100/stream")
+            assert isinstance(result, ThreadedVideoCapture)
+            result.release()
+
+    def test_http_url_returns_threaded_capture(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = open_camera_source("http://192.168.1.100/mjpeg")
+            assert isinstance(result, ThreadedVideoCapture)
+            result.release()
+
+    def test_rtsp_url_not_opened_exits(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = False
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            with pytest.raises(SystemExit):
+                open_camera_source("rtsp://bad-url")
+
+
+# --- parse_args RTSP tests ---
+
+class TestParseArgsRtsp:
+    def test_camera_accepts_rtsp_url(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--camera", "rtsp://192.168.1.100/stream"])
+        args = parse_args()
+        assert args.camera == "rtsp://192.168.1.100/stream"
+
+    def test_camera_default_is_string_zero(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.camera == "0"
+        assert isinstance(args.camera, str)
+
+    def test_rtsp_transport_default_tcp(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.rtsp_transport == "tcp"
+
+    def test_rtsp_transport_udp(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--rtsp-transport", "udp"])
+        args = parse_args()
+        assert args.rtsp_transport == "udp"
+
+    def test_rtsp_transport_invalid_rejected(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--rtsp-transport", "invalid"])
+        with pytest.raises(SystemExit):
+            parse_args()
+
+
+# --- reconnect_camera with RTSP tests ---
+
+class TestReconnectCameraRtsp:
+    def test_reconnect_local_camera(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        with patch("babyping.try_open_camera", return_value=mock_cap):
+            result = reconnect_camera("0", max_attempts=3, base_delay=0.01)
+        assert result is mock_cap
+
+    def test_reconnect_rtsp_camera(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = reconnect_camera("rtsp://192.168.1.100/stream", max_attempts=3, base_delay=0.01)
+        assert result is not None
+        assert isinstance(result, ThreadedVideoCapture)
+        result.release()
+
+    def test_reconnect_rtsp_fails_returns_none(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = False
+        mock_cap.read.return_value = (False, None)
+        with patch("babyping.cv2.VideoCapture", return_value=mock_cap):
+            result = reconnect_camera("rtsp://bad-url", max_attempts=2, base_delay=0.01)
         assert result is None
