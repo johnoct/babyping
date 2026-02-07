@@ -132,13 +132,18 @@ class TestGetEvents:
 
 
 class TestPrune:
-    def test_prune_removes_oldest(self, event_log, tmp_events_file):
+    def test_prune_removes_oldest_from_file(self, event_log, tmp_events_file):
         for i in range(10):
             event_log.log_event("motion", timestamp=float(i), area=float(i))
         event_log.prune(max_events=5)
-        events = event_log.get_events(limit=100)
+        # Verify the file was pruned
+        with open(tmp_events_file) as f:
+            lines = f.readlines()
+        assert len(lines) == 5
+        # A new EventLog loading from disk should see only 5 events
+        log2 = EventLog(tmp_events_file)
+        events = log2.get_events(limit=100)
         assert len(events) == 5
-        # Should keep the 5 newest (timestamps 5-9)
         timestamps = [e["timestamp"] for e in events]
         assert min(timestamps) == 5.0
         assert max(timestamps) == 9.0
@@ -180,6 +185,80 @@ class TestThreadSafety:
         assert len(errors) == 0
         events = event_log.get_events(limit=200)
         assert len(events) == 100
+
+
+class TestInMemoryCache:
+    def test_get_events_reads_from_memory(self, tmp_events_file):
+        """get_events should work from in-memory cache without file I/O after init."""
+        log = EventLog(tmp_events_file)
+        log.log_event("motion", timestamp=1.0, area=100.0)
+        log.log_event("motion", timestamp=2.0, area=200.0)
+
+        # Delete the file — get_events should still work from memory
+        os.remove(tmp_events_file)
+        events = log.get_events()
+        assert len(events) == 2
+        assert events[0]["timestamp"] == 2.0
+
+    def test_events_loaded_from_disk_on_init(self, tmp_events_file):
+        """Events written to disk should be loaded into memory on init."""
+        # Write events directly to file
+        with open(tmp_events_file, "w") as f:
+            f.write(json.dumps({"type": "motion", "timestamp": 1.0, "area": 100.0, "audio_level": None, "snapshot": None}) + "\n")
+            f.write(json.dumps({"type": "sound", "timestamp": 2.0, "area": None, "audio_level": 0.5, "snapshot": None}) + "\n")
+
+        # Create a new EventLog — should load from disk
+        log = EventLog(tmp_events_file)
+        events = log.get_events()
+        assert len(events) == 2
+        assert events[0]["timestamp"] == 2.0
+        assert events[1]["timestamp"] == 1.0
+
+    def test_deque_auto_prunes_at_maxlen(self, tmp_events_file):
+        """Deque should auto-prune old events when max_events is reached."""
+        log = EventLog(tmp_events_file, max_events=5)
+        for i in range(10):
+            log.log_event("motion", timestamp=float(i), area=float(i))
+
+        events = log.get_events(limit=100)
+        assert len(events) == 5
+        # Should keep the 5 newest (timestamps 5-9)
+        timestamps = [e["timestamp"] for e in events]
+        assert min(timestamps) == 5.0
+        assert max(timestamps) == 9.0
+
+    def test_sync_to_disk(self, tmp_events_file):
+        """sync_to_disk should rewrite the file from the in-memory deque."""
+        log = EventLog(tmp_events_file, max_events=3)
+        for i in range(5):
+            log.log_event("motion", timestamp=float(i), area=float(i))
+
+        # File has all 5 appended lines, but deque only has last 3
+        log.sync_to_disk()
+
+        # Verify the file now only has 3 events
+        with open(tmp_events_file) as f:
+            lines = f.readlines()
+        assert len(lines) == 3
+
+        # Verify a new EventLog loads the synced data correctly
+        log2 = EventLog(tmp_events_file, max_events=3)
+        events = log2.get_events(limit=100)
+        assert len(events) == 3
+        assert events[0]["timestamp"] == 4.0
+
+    def test_disk_error_still_caches_in_memory(self, tmp_path):
+        """Even if disk write fails, events should be in memory."""
+        events_file = str(tmp_path / "events.jsonl")
+        log = EventLog(events_file)
+        log.log_event("motion", area=100.0)
+        os.chmod(events_file, 0o444)
+        try:
+            log.log_event("motion", area=200.0)
+            events = log.get_events()
+            assert len(events) == 2
+        finally:
+            os.chmod(events_file, 0o644)
 
 
 class TestDiskErrorHandling:

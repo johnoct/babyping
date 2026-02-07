@@ -12,7 +12,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock, patch
 
-from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, get_tailscale_ip, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
+from babyping import apply_night_mode, crop_to_roi, detect_motion, FrameBuffer, get_tailscale_ip, _tailscale_cache, offset_contours, parse_args, parse_roi_string, reconnect_camera, save_snapshot, throttle_fps, try_open_camera, SENSITIVITY_THRESHOLDS
 
 
 # --- detect_motion tests ---
@@ -263,6 +263,39 @@ class TestROI:
         result = offset_contours([contour], None)
         np.testing.assert_array_equal(result[0], contour)
 
+    def test_blur_after_crop_matches_full_frame_when_no_roi(self):
+        """With no ROI, blur-after-crop should produce same result as blur-before-crop."""
+        prev = make_gray_frame(value=0)
+        curr = make_gray_frame(value=0)
+        curr[50:150, 50:200] = 255
+
+        # Old approach: blur full frame, then crop (no-op with roi=None)
+        prev_old = cv2.GaussianBlur(prev, (21, 21), 0)
+        curr_old = cv2.GaussianBlur(curr, (21, 21), 0)
+        motion_old, _, area_old = detect_motion(prev_old, curr_old, 500)
+
+        # New approach: crop (no-op), then blur
+        prev_new = cv2.GaussianBlur(crop_to_roi(prev, None), (21, 21), 0)
+        curr_new = cv2.GaussianBlur(crop_to_roi(curr, None), (21, 21), 0)
+        motion_new, _, area_new = detect_motion(prev_new, curr_new, 500)
+
+        assert motion_old == motion_new
+        assert area_old == area_new
+
+    def test_blur_after_crop_detects_motion_in_roi(self):
+        """Blur-after-crop should correctly detect motion within a specified ROI."""
+        prev = make_gray_frame(value=0)
+        curr = make_gray_frame(value=0)
+        # Put motion inside the ROI region
+        curr[50:150, 100:250] = 255
+
+        roi = (100, 50, 150, 100)
+        prev_cropped = cv2.GaussianBlur(crop_to_roi(prev, roi), (21, 21), 0)
+        curr_cropped = cv2.GaussianBlur(crop_to_roi(curr, roi), (21, 21), 0)
+        motion, _, area = detect_motion(prev_cropped, curr_cropped, 500)
+        assert motion is True
+        assert area > 0
+
 
 # --- parse_roi_string tests ---
 
@@ -399,6 +432,25 @@ class TestFrameBuffer:
         assert buf.get_fps() == 30
         buf.set_fps(5)
         assert buf.get_fps() == 5
+
+    def test_has_viewers_true_after_get(self):
+        buf = FrameBuffer()
+        buf.update(b"frame")
+        buf.get()
+        assert buf.has_viewers() is True
+
+    def test_has_viewers_false_initially(self):
+        buf = FrameBuffer()
+        assert buf.has_viewers() is False
+
+    def test_has_viewers_false_after_timeout(self):
+        buf = FrameBuffer()
+        buf.update(b"frame")
+        buf.get()
+        # Manually expire the last_read_time
+        with buf._lock:
+            buf._last_read_time = time.monotonic() - 6.0
+        assert buf.has_viewers() is False
 
 
 # --- parse_args audio flag tests ---
@@ -554,6 +606,11 @@ class TestReconnectCamera:
 # --- get_tailscale_ip tests ---
 
 class TestGetTailscaleIp:
+    def setup_method(self):
+        """Reset the tailscale cache before each test."""
+        _tailscale_cache["ip"] = None
+        _tailscale_cache["expires"] = 0
+
     def test_returns_tailscale_ip_when_present(self):
         """Should return 100.x.x.x address from network interfaces."""
         fake_output = (
@@ -621,6 +678,48 @@ class TestGetTailscaleIp:
             mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
             result = get_tailscale_ip()
         assert result == "100.100.1.1"
+
+
+class TestTailscaleIpCache:
+    def setup_method(self):
+        """Reset the tailscale cache before each test."""
+        from babyping import _tailscale_cache
+        _tailscale_cache["ip"] = None
+        _tailscale_cache["expires"] = 0
+
+    def test_tailscale_ip_cached(self):
+        """Second call within TTL should return cached result without subprocess."""
+        fake_output = "utun4: flags=8051<UP> mtu 1280\n\tinet 100.85.42.17 --> 100.85.42.17 netmask 0xffffffff\n"
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result1 = get_tailscale_ip()
+            result2 = get_tailscale_ip()
+        assert result1 == "100.85.42.17"
+        assert result2 == "100.85.42.17"
+        assert mock_run.call_count == 1  # Only one subprocess call
+
+    def test_tailscale_ip_cache_expires(self):
+        """After TTL expires, should call subprocess again."""
+        fake_output = "utun4: flags=8051<UP> mtu 1280\n\tinet 100.85.42.17 --> 100.85.42.17 netmask 0xffffffff\n"
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            get_tailscale_ip()
+            # Expire the cache
+            from babyping import _tailscale_cache
+            _tailscale_cache["expires"] = 0
+            get_tailscale_ip()
+        assert mock_run.call_count == 2
+
+    def test_tailscale_ip_none_cached(self):
+        """None result should also be cached."""
+        fake_output = "en0: flags=8863<UP> mtu 1500\n\tinet 192.168.1.50 netmask 0xffffff00\n"
+        with patch("babyping.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+            result1 = get_tailscale_ip()
+            result2 = get_tailscale_ip()
+        assert result1 is None
+        assert result2 is None
+        assert mock_run.call_count == 1
 
 
 class TestStartWebServer:

@@ -217,6 +217,8 @@ class TestMotionPipeline:
         frames = [still, b, still, still, b]
 
         with MainRunner(args, frames) as r:
+            # Simulate a viewer so frame_buffer.update() runs (which calls time.time)
+            r.frame_buffer.get()
             time_calls = [0]
             base = 1000.0
 
@@ -276,7 +278,8 @@ class TestMotionPipeline:
             motion_msgs = [m for _, m in r.notification_messages() if "Motion detected" in m]
             assert len(motion_msgs) == 0
 
-    def test_motion_prunes_events_when_max_exceeded(self):
+    def test_max_events_passed_to_event_log(self):
+        """EventLog is initialized with max_events from args for deque auto-pruning."""
         a, b = _motion_pair()
         args = make_fake_args(max_events=5)
 
@@ -285,9 +288,8 @@ class TestMotionPipeline:
                 mock_log = MagicMock()
                 MockLog.return_value = mock_log
                 r.run()
-                prune_calls = mock_log.prune.call_args_list
-                assert len(prune_calls) >= 1
-                assert prune_calls[0].kwargs.get("max_events") == 5
+                # Verify EventLog was created with max_events
+                MockLog.assert_called_once_with(max_events=5)
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +679,8 @@ class TestDisplayAndEncoding:
         args = make_fake_args()
 
         with MainRunner(args, [still, still]) as r:
+            # Simulate a viewer so encoding is not skipped
+            r.frame_buffer.get()
             r.run()
             jpeg_bytes = r.frame_buffer.get()
             assert jpeg_bytes is not None
@@ -688,10 +692,12 @@ class TestDisplayAndEncoding:
         args_normal = make_fake_args(night_mode=False)
 
         with MainRunner(args_night, [dark, dark]) as r_night:
+            r_night.frame_buffer.get()  # simulate viewer
             r_night.run()
             night_bytes = r_night.frame_buffer.get()
 
         with MainRunner(args_normal, [dark, dark]) as r_normal:
+            r_normal.frame_buffer.get()  # simulate viewer
             r_normal.run()
             normal_bytes = r_normal.frame_buffer.get()
 
@@ -711,6 +717,30 @@ class TestDisplayAndEncoding:
             r.run()
             read_count = r.cap.read.call_count
             assert read_count < 20
+
+    def test_jpeg_skipped_when_no_viewers(self):
+        """When no_preview=True and no one calls frame_buffer.get(), imencode should be skipped."""
+        still = make_frame(value=128)
+        args = make_fake_args(no_preview=True)
+
+        with MainRunner(args, [still, still, still]) as r:
+            # Ensure _last_read_time stays None (no viewers)
+            with patch("cv2.imencode", wraps=cv2.imencode) as mock_encode:
+                r.run()
+                # No viewers + no_preview = imencode should NOT be called
+                assert mock_encode.call_count == 0
+
+    def test_jpeg_encoded_when_viewers_connected(self):
+        """When a viewer is connected (get() was called recently), imencode should run."""
+        still = make_frame(value=128)
+        args = make_fake_args(no_preview=True)
+
+        with MainRunner(args, [still, still, still]) as r:
+            # Simulate a viewer by calling get() to set _last_read_time
+            r.frame_buffer.get()
+            with patch("cv2.imencode", wraps=cv2.imencode) as mock_encode:
+                r.run()
+                assert mock_encode.call_count >= 1
 
 
 # ---------------------------------------------------------------------------

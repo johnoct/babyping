@@ -19,6 +19,7 @@ class FrameBuffer:
         self._frame_bytes = None
         self._last_motion_time = None
         self._last_frame_time = None
+        self._last_read_time = None
         self._roi = None
         self._audio_level = 0.0
         self._last_sound_time = None
@@ -35,7 +36,13 @@ class FrameBuffer:
 
     def get(self):
         with self._lock:
+            self._last_read_time = time.monotonic()
             return self._frame_bytes
+
+    def has_viewers(self):
+        with self._lock:
+            return (self._last_read_time is not None
+                    and (time.monotonic() - self._last_read_time) < 5.0)
 
     def set_last_motion_time(self, t):
         with self._lock:
@@ -281,8 +288,14 @@ def get_local_ip():
         s.close()
 
 
+_tailscale_cache = {"ip": None, "expires": 0}
+
+
 def get_tailscale_ip():
     """Get the Tailscale IP address (100.64.0.0/10 CGNAT range), or None if not connected."""
+    now = time.monotonic()
+    if now < _tailscale_cache["expires"]:
+        return _tailscale_cache["ip"]
     try:
         result = subprocess.run(["ifconfig"], capture_output=True, text=True)
         for match in re.finditer(r'inet\s+(100\.(\d+)\.\d+\.\d+)', result.stdout):
@@ -290,9 +303,13 @@ def get_tailscale_ip():
             second_octet = int(match.group(2))
             # Tailscale uses CGNAT range 100.64.0.0/10 (second octet 64-127)
             if 64 <= second_octet <= 127:
+                _tailscale_cache["ip"] = ip
+                _tailscale_cache["expires"] = now + 60
                 return ip
     except Exception:
         pass
+    _tailscale_cache["ip"] = None
+    _tailscale_cache["expires"] = now + 60
     return None
 
 
@@ -383,7 +400,7 @@ def main():
         print(f"  Audio:        off")
 
     from events import EventLog
-    event_log = EventLog()
+    event_log = EventLog(max_events=args.max_events)
 
     from web import create_app
     local_ip = get_local_ip()
@@ -412,6 +429,7 @@ def main():
     last_sound_alert_time = 0
     consecutive_failures = 0
     max_frame_failures = 30
+    event_count = 0
 
     try:
         while True:
@@ -443,13 +461,12 @@ def main():
             threshold = SENSITIVITY_THRESHOLDS[frame_buffer.get_sensitivity()]
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
             motion = False
             area = 0
             if prev_gray is not None:
-                prev_cropped = crop_to_roi(prev_gray, roi)
-                curr_cropped = crop_to_roi(gray, roi)
+                prev_cropped = cv2.GaussianBlur(crop_to_roi(prev_gray, roi), (21, 21), 0)
+                curr_cropped = cv2.GaussianBlur(crop_to_roi(gray, roi), (21, 21), 0)
                 motion, contours, area = detect_motion(prev_cropped, curr_cropped, threshold)
 
                 if motion:
@@ -484,8 +501,9 @@ def main():
 
                     snap_filename = os.path.basename(snap_path) if args.snapshots and snap_path else None
                     event_log.log_event("motion", area=float(area), snapshot=snap_filename)
-                    if args.max_events > 0:
-                        event_log.prune(max_events=args.max_events)
+                    event_count += 1
+                    if event_count % 100 == 0:
+                        event_log.sync_to_disk()
 
             # Check audio monitor health
             if audio_monitor is not None and not audio_monitor.is_alive():
@@ -514,11 +532,13 @@ def main():
                         if frame_buffer.get_sound_alerts_enabled():
                             send_notification("BabyPing", "Sound detected")
                         event_log.log_event("sound")
-                        if args.max_events > 0:
-                            event_log.prune(max_events=args.max_events)
+                        event_count += 1
+                        if event_count % 100 == 0:
+                            event_log.sync_to_disk()
 
-            _, jpeg = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            frame_buffer.update(jpeg.tobytes())
+            if frame_buffer.has_viewers() or not args.no_preview:
+                _, jpeg = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                frame_buffer.update(jpeg.tobytes())
             if not args.no_preview:
                 cv2.imshow("BabyPing", display_frame)
                 key = cv2.waitKey(1) & 0xFF
