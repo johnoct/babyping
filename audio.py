@@ -23,7 +23,7 @@ class AudioMonitor:
         self._thread = None
         self._stream = None
 
-        # Calibration state
+        # Calibration state (protected by _lock)
         self._calibrating = threshold is None
         self._calibration_samples = []
         self._calibration_chunk_size = int(self.SAMPLERATE * self.CHUNK_DURATION)
@@ -41,6 +41,10 @@ class AudioMonitor:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    def is_alive(self):
+        """Check if the audio monitor thread is still running."""
+        return self._running and self._thread is not None and self._thread.is_alive()
 
     def get_level(self):
         """Get current audio level (0.0 to 1.0)."""
@@ -72,20 +76,22 @@ class AudioMonitor:
 
     def _audio_callback(self, indata, frames, time_info, status):
         """Called by sounddevice for each audio chunk."""
+        if status:
+            print(f"Audio stream status: {status}")
+
         rms = self._compute_rms(indata)
 
-        # During calibration, collect ambient noise samples
-        if self._calibrating:
-            self._calibration_samples.append(rms)
-            if len(self._calibration_samples) >= self._calibration_needed:
-                ambient = np.mean(self._calibration_samples)
-                self._threshold = max(ambient * self.CALIBRATION_MARGIN, 0.005)
-                self._calibrating = False
-            with self._lock:
-                self._level = min(rms, 1.0)
-            return
-
         with self._lock:
+            # During calibration, collect ambient noise samples
+            if self._calibrating:
+                self._calibration_samples.append(rms)
+                if len(self._calibration_samples) >= self._calibration_needed:
+                    ambient = np.mean(self._calibration_samples)
+                    self._threshold = max(ambient * self.CALIBRATION_MARGIN, 0.005)
+                    self._calibrating = False
+                self._level = min(rms, 1.0)
+                return
+
             self._level = min(rms, 1.0)
             if self._threshold is not None and rms >= self._threshold:
                 self._last_sound_time = time.time()
