@@ -521,3 +521,34 @@ class TestWebSettingsEdgeCases:
         data = json.loads(resp.data)
         assert data["sensitivity"] == "medium"
         assert data["fps"] == 10
+
+
+class TestWebFullscreen:
+    def test_index_includes_fullscreen_button(self, client):
+        resp = client.get("/")
+        assert b'id="fs-btn"' in resp.data
+        assert b"fs-btn" in resp.data
+
+    def test_index_includes_toggle_fullscreen_js(self, client):
+        resp = client.get("/")
+        assert b"toggleFullscreen" in resp.data
+
+    def test_index_includes_fullscreen_css(self, client):
+        resp = client.get("/")
+        assert b":fullscreen" in resp.data
+        assert b":-webkit-full-screen" in resp.data
+
+    def test_index_includes_fullscreen_api_calls(self, client):
+        resp = client.get("/")
+        assert b"requestFullscreen" in resp.data
+        assert b"exitFullscreen" in resp.data
+
+    def test_index_includes_fullscreen_change_listener(self, client):
+        resp = client.get("/")
+        assert b"fullscreenchange" in resp.data
+        assert b"webkitfullscreenchange" in resp.data
+
+    def test_index_includes_doubletap_fullscreen(self, client):
+        resp = client.get("/")
+        assert b"dblclick" in resp.data
+        assert b"lastTapTime" in resp.data
