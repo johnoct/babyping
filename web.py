@@ -81,6 +81,8 @@ def create_app(args, frame_buffer=None, event_log=None):
 
     @app.route("/snapshots/<filename>")
     def snapshot_file(filename):
+        if '..' in filename or '/' in filename:
+            return jsonify({"error": "Invalid filename"}), 400
         snapshot_dir = os.path.expanduser(args.snapshot_dir)
         return send_from_directory(snapshot_dir, filename)
 

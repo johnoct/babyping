@@ -180,3 +180,17 @@ class TestThreadSafety:
         assert len(errors) == 0
         events = event_log.get_events(limit=200)
         assert len(events) == 100
+
+
+class TestDiskErrorHandling:
+    def test_log_event_survives_disk_error(self, tmp_path):
+        """log_event should not raise when disk write fails."""
+        events_file = str(tmp_path / "events.jsonl")
+        log = EventLog(events_file)
+        # Make the file read-only to simulate disk error
+        log.log_event("motion", area=100.0)  # First write succeeds
+        os.chmod(events_file, 0o444)
+        try:
+            log.log_event("motion", area=200.0)  # Should not raise
+        finally:
+            os.chmod(events_file, 0o644)  # Restore for cleanup

@@ -1,6 +1,7 @@
 import glob
 import sys
 import os
+import threading
 
 import cv2
 import numpy as np
@@ -600,3 +601,31 @@ class TestGetTailscaleIp:
             mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
             result = get_tailscale_ip()
         assert result == "100.100.1.1"
+
+
+class TestStartWebServer:
+    def test_returns_thread(self):
+        from babyping import start_web_server
+        from flask import Flask
+        app = Flask(__name__)
+        thread = start_web_server(app, 9999)
+        assert isinstance(thread, threading.Thread)
+        assert thread.daemon is True
+
+    def test_thread_is_not_started(self):
+        from babyping import start_web_server
+        from flask import Flask
+        app = Flask(__name__)
+        thread = start_web_server(app, 9999)
+        assert not thread.is_alive()
+
+
+class TestSaveSnapshotDiskError:
+    def test_returns_none_on_os_error(self, tmp_path):
+        """save_snapshot should return None if directory creation fails."""
+        frame = make_gray_frame(value=128)
+        # Use a path that will fail (file exists where dir is expected)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+        result = save_snapshot(frame, snapshot_dir=str(blocker / "subdir"))
+        assert result is None

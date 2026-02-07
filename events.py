@@ -34,8 +34,11 @@ class EventLog:
         }
 
         with self._lock:
-            with open(self._path, "a") as f:
-                f.write(json.dumps(event) + "\n")
+            try:
+                with open(self._path, "a") as f:
+                    f.write(json.dumps(event) + "\n")
+            except OSError:
+                pass
 
     def get_events(self, limit=50, offset=0, event_type=None):
         """Read events from the log, newest first.
