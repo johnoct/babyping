@@ -175,26 +175,45 @@ def send_notification(title, message):
     ], capture_output=True)
 
 
+def start_web_server(flask_app, port):
+    """Create and return a daemon thread running the web server."""
+    try:
+        from waitress import serve as waitress_serve
+        thread = threading.Thread(
+            target=lambda: waitress_serve(flask_app, host="0.0.0.0", port=port, threads=4, _quiet=True),
+            daemon=True
+        )
+    except ImportError:
+        thread = threading.Thread(
+            target=lambda: flask_app.run(host="0.0.0.0", port=port, threaded=True),
+            daemon=True
+        )
+    return thread
+
+
 def save_snapshot(frame, snapshot_dir="~/.babyping/events", max_snapshots=100):
-    """Save a frame as a JPEG snapshot. Returns the file path."""
-    snapshot_dir = os.path.expanduser(snapshot_dir)
-    os.makedirs(snapshot_dir, exist_ok=True)
+    """Save a frame as a JPEG snapshot. Returns the file path, or None on failure."""
+    try:
+        snapshot_dir = os.path.expanduser(snapshot_dir)
+        os.makedirs(snapshot_dir, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    filepath = os.path.join(snapshot_dir, f"{timestamp}.jpg")
-    success = cv2.imwrite(filepath, frame)
-    if not success:
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        filepath = os.path.join(snapshot_dir, f"{timestamp}.jpg")
+        success = cv2.imwrite(filepath, frame)
+        if not success:
+            return None
+
+        if max_snapshots > 0:
+            files = sorted(glob.glob(os.path.join(snapshot_dir, "*.jpg")))
+            while len(files) > max_snapshots:
+                try:
+                    os.remove(files.pop(0))
+                except FileNotFoundError:
+                    pass
+
+        return filepath
+    except OSError:
         return None
-
-    if max_snapshots > 0:
-        files = sorted(glob.glob(os.path.join(snapshot_dir, "*.jpg")))
-        while len(files) > max_snapshots:
-            try:
-                os.remove(files.pop(0))
-            except FileNotFoundError:
-                pass
-
-    return filepath
 
 
 _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -370,17 +389,7 @@ def main():
         print(f"  Web UI:       http://{tailscale_ip}:{args.port} (Tailscale)")
 
     flask_app = create_app(args, frame_buffer, event_log=event_log)
-    try:
-        from waitress import serve as waitress_serve
-        web_thread = threading.Thread(
-            target=lambda: waitress_serve(flask_app, host="0.0.0.0", port=args.port, threads=4, _quiet=True),
-            daemon=True
-        )
-    except ImportError:
-        web_thread = threading.Thread(
-            target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
-            daemon=True
-        )
+    web_thread = start_web_server(flask_app, args.port)
     web_thread.start()
     print()
 
@@ -451,6 +460,8 @@ def main():
                         snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
                         if snap_path:
                             snap_msg = f" → {snap_path}"
+                        else:
+                            print("Warning: Snapshot save failed — disk may be full")
                     print(f"[{timestamp}] Motion detected — area={area:.0f}px²{snap_msg}")
                     if frame_buffer.get_motion_alerts_enabled():
                         send_notification("BabyPing", f"Motion detected ({area:.0f}px²)")
@@ -468,6 +479,13 @@ def main():
                 send_notification("BabyPing", "Audio monitor disconnected")
                 frame_buffer.set_audio_enabled(False)
                 audio_monitor = None
+
+            # Check web server health
+            if not web_thread.is_alive():
+                print("Warning: Web server stopped — restarting")
+                send_notification("BabyPing", "Web server crashed — restarting")
+                web_thread = start_web_server(flask_app, args.port)
+                web_thread.start()
 
             # Sync audio state to frame buffer
             if audio_monitor is not None:

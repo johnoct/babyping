@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=1.24",
     "flask>=3.0",
     "waitress>=3.0",
+    "sounddevice>=0.4",
 ]
 
 [project.optional-dependencies]

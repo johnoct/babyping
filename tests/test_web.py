@@ -552,3 +552,22 @@ class TestWebFullscreen:
         resp = client.get("/")
         assert b"dblclick" in resp.data
         assert b"lastTapTime" in resp.data
+
+
+class TestWebSnapshotPathTraversal:
+    def test_path_traversal_blocked(self, client):
+        resp = client.get("/snapshots/../../../etc/passwd")
+        assert resp.status_code in (400, 404)
+
+    def test_path_traversal_dotdot_in_name(self, client):
+        resp = client.get("/snapshots/..%2F..%2Fetc%2Fpasswd")
+        assert resp.status_code in (400, 404)
+
+    def test_valid_snapshot_filename_allowed(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            resp = c.get("/snapshots/2026-01-01T00-00-00.jpg")
+            # 404 because file doesn't exist, but not 400
+            assert resp.status_code == 404
