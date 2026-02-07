@@ -20,4 +20,4 @@ python babyping.py ...
 **Environment**
 - macOS version:
 - Python version:
-- Camera setup: (built-in / iPhone Continuity Camera)
+- Camera setup: (built-in / iPhone Continuity Camera / RTSP IP camera)
