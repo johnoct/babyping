@@ -4,6 +4,30 @@ All notable changes to BabyPing will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.0.0] - 2026-02-07
+
+### Added
+- RTSP/IP camera support — `--camera rtsp://user:pass@ip/stream` with threaded frame reader
+- `--rtsp-transport tcp|udp` flag for RTSP transport selection
+- HTTP Basic Auth for the web UI via `--password`
+- `--host` flag to control web UI bind address (default: `127.0.0.1`)
+- Credential masking in all log output for RTSP URLs
+- Fullscreen stream toggle with double-tap support
+- 290 tests (unit, web, integration)
+
+### Changed
+- `--camera` accepts both integer indices and RTSP/HTTP URLs (backward compatible)
+- Web UI defaults to `127.0.0.1` (localhost only) instead of `0.0.0.0`
+- Tailscale IP lookup cached with 60s TTL (avoids subprocess per /status poll)
+- EventLog uses in-memory deque — `get_events()` no longer reads from disk
+- Event pruning runs periodically (every 100 events) instead of per-event
+- JPEG encoding skipped when no web viewers are connected
+- Gaussian blur applied after ROI crop instead of before (smaller work area)
+- Camera reconnection supports both local and network sources
+
+### Fixed
+- Production hardening: snapshot disk errors, web server crash recovery, frame drop handling
+
 ## [2.0.0] - 2026-02-06
 
 ### Added
@@ -41,4 +65,3 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Premium dark web UI with glassmorphism, motion glow effect
 - Fullscreen snapshot viewer in web UI
 - PWA-ready meta tags for iOS home screen install
-- 47 tests with GitHub Actions CI
