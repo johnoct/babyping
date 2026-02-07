@@ -22,7 +22,7 @@ jobs:
           cache: pip
 
       - run: sudo apt-get update && sudo apt-get install -y libportaudio2
-      - run: pip install opencv-python-headless numpy flask sounddevice pytest
+      - run: pip install opencv-python-headless numpy flask waitress sounddevice pytest
       - run: pytest tests/ -v
 
       - name: Extract version from tag

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "babyping"
-version = "1.0.0"
+version = "2.0.0"
 description = "Lightweight baby monitor with motion detection, macOS notifications, and a local web UI"
 readme = "README.md"
 license = {text = "MIT"}
@@ -13,6 +13,7 @@ dependencies = [
     "opencv-python>=4.8",
     "numpy>=1.24",
     "flask>=3.0",
+    "waitress>=3.0",
 ]
 
 [project.optional-dependencies]

@@ -370,10 +370,17 @@ def main():
         print(f"  Web UI:       http://{tailscale_ip}:{args.port} (Tailscale)")
 
     flask_app = create_app(args, frame_buffer, event_log=event_log)
-    web_thread = threading.Thread(
-        target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
-        daemon=True
-    )
+    try:
+        from waitress import serve as waitress_serve
+        web_thread = threading.Thread(
+            target=lambda: waitress_serve(flask_app, host="0.0.0.0", port=args.port, threads=4, _quiet=True),
+            daemon=True
+        )
+    except ImportError:
+        web_thread = threading.Thread(
+            target=lambda: flask_app.run(host="0.0.0.0", port=args.port, threaded=True),
+            daemon=True
+        )
     web_thread.start()
     print()
 
@@ -405,6 +412,7 @@ def main():
                     prev_gray = None
                     print("Reconnected to camera.")
                     send_notification("BabyPing", "Camera reconnected")
+                time.sleep(0.1)
                 continue
             consecutive_failures = 0
 
@@ -437,6 +445,7 @@ def main():
                 now = time.time()
                 if now - last_alert_time >= args.cooldown:
                     timestamp = datetime.now().isoformat(timespec="seconds")
+                    snap_path = None
                     snap_msg = ""
                     if args.snapshots:
                         snap_path = save_snapshot(display_frame, args.snapshot_dir, args.max_snapshots)
@@ -452,6 +461,13 @@ def main():
                     event_log.log_event("motion", area=float(area), snapshot=snap_filename)
                     if args.max_events > 0:
                         event_log.prune(max_events=args.max_events)
+
+            # Check audio monitor health
+            if audio_monitor is not None and not audio_monitor.is_alive():
+                print("Warning: Audio monitor stopped — disabling audio")
+                send_notification("BabyPing", "Audio monitor disconnected")
+                frame_buffer.set_audio_enabled(False)
+                audio_monitor = None
 
             # Sync audio state to frame buffer
             if audio_monitor is not None:
@@ -473,10 +489,9 @@ def main():
             frame_buffer.update(jpeg.tobytes())
             if not args.no_preview:
                 cv2.imshow("BabyPing", display_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    break
 
             throttle_fps(frame_start, frame_buffer.get_fps())
     except KeyboardInterrupt:

@@ -481,3 +481,43 @@ class TestWebTailscale:
         """The secure pill should be hidden by default (display:none)."""
         resp = ts_client.get("/")
         assert b"secure-pill" in resp.data
+
+
+class TestWebSettingsEdgeCases:
+    @pytest.fixture
+    def settings_client(self):
+        buf = FrameBuffer()
+        app = create_app(FakeArgs(), buf)
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c, buf
+
+    def test_fps_non_integer_does_not_crash(self, settings_client):
+        """Non-integer FPS should be handled gracefully, not 500."""
+        client, buf = settings_client
+        resp = client.post("/settings", json={"fps": "abc"})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["fps"] == 10  # unchanged
+
+    def test_fps_none_does_not_crash(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"fps": None})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["fps"] == 10
+
+    def test_fps_list_does_not_crash(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={"fps": [10]})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["fps"] == 10
+
+    def test_empty_body_no_change(self, settings_client):
+        client, buf = settings_client
+        resp = client.post("/settings", json={})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["sensitivity"] == "medium"
+        assert data["fps"] == 10

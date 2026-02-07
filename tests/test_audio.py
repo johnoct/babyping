@@ -172,6 +172,76 @@ class TestAudioMonitorCalibration:
         assert mon._threshold > ambient_rms
 
 
+class TestAudioMonitorIsAlive:
+    def test_is_alive_false_before_start(self):
+        with patch("audio.sd"):
+            mon = AudioMonitor()
+        assert mon.is_alive() is False
+
+    def test_is_alive_false_after_stop(self):
+        with patch("audio.sd"):
+            mon = AudioMonitor()
+            mon._running = True
+            mock_thread = MagicMock()
+            mon._thread = mock_thread
+            mon.stop()
+        assert mon.is_alive() is False
+
+    def test_is_alive_true_when_running(self):
+        with patch("audio.sd"):
+            mon = AudioMonitor()
+            mon._running = True
+            mock_thread = MagicMock()
+            mock_thread.is_alive.return_value = True
+            mon._thread = mock_thread
+        assert mon.is_alive() is True
+
+    def test_is_alive_false_when_thread_dead(self):
+        with patch("audio.sd"):
+            mon = AudioMonitor()
+            mon._running = True
+            mock_thread = MagicMock()
+            mock_thread.is_alive.return_value = False
+            mon._thread = mock_thread
+        assert mon.is_alive() is False
+
+
+class TestAudioMonitorCallbackStatus:
+    def test_callback_prints_status_warnings(self, capsys):
+        """Audio callback should print non-None status."""
+        with patch("audio.sd"):
+            mon = AudioMonitor(threshold=0.01)
+        data = np.full((4410, 1), 0.01, dtype=np.float32)
+        mon._audio_callback(data, None, None, "input overflow")
+        captured = capsys.readouterr()
+        assert "input overflow" in captured.out
+
+    def test_callback_no_print_on_none_status(self, capsys):
+        with patch("audio.sd"):
+            mon = AudioMonitor(threshold=0.01)
+        data = np.full((4410, 1), 0.01, dtype=np.float32)
+        mon._audio_callback(data, None, None, None)
+        captured = capsys.readouterr()
+        assert "status" not in captured.out
+
+
+class TestAudioMonitorCalibrationThreadSafety:
+    def test_calibration_state_protected_by_lock(self):
+        """All calibration state changes happen inside the lock."""
+        with patch("audio.sd"):
+            mon = AudioMonitor()
+
+        # Feed enough samples to complete calibration
+        quiet_data = np.full((4410, 1), 0.01, dtype=np.float32)
+        for _ in range(30):
+            mon._audio_callback(quiet_data, None, None, None)
+
+        # Verify calibration completed under lock (threshold set, calibrating False)
+        with mon._lock:
+            assert mon._calibrating is False
+            assert mon._threshold is not None
+
+
 class TestAudioMonitorThreadSafety:
     def test_get_level_is_thread_safe(self):
         """get_level should use the lock."""

@@ -18,13 +18,16 @@ def create_app(args, frame_buffer=None, event_log=None):
     @app.route("/stream")
     def stream():
         def generate():
-            while True:
-                frame_bytes = frame_buffer.get()
-                if frame_bytes is not None:
-                    yield (b"--frame\r\n"
-                           b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                fps = frame_buffer.get_fps()
-                time.sleep(1.0 / (fps if fps > 0 else 30))
+            try:
+                while True:
+                    frame_bytes = frame_buffer.get()
+                    if frame_bytes is not None:
+                        yield (b"--frame\r\n"
+                               b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+                    fps = frame_buffer.get_fps()
+                    time.sleep(1.0 / (fps if fps > 0 else 30))
+            except GeneratorExit:
+                return
 
         return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -99,7 +102,10 @@ def create_app(args, frame_buffer=None, event_log=None):
         if "sensitivity" in data and data["sensitivity"] in ("low", "medium", "high"):
             frame_buffer.set_sensitivity(data["sensitivity"])
         if "fps" in data:
-            fps_val = int(data["fps"])
+            try:
+                fps_val = int(data["fps"])
+            except (ValueError, TypeError):
+                fps_val = None
             if fps_val in (5, 10, 15, 30):
                 frame_buffer.set_fps(fps_val)
         return jsonify({
