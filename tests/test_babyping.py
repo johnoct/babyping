@@ -112,6 +112,26 @@ class TestParseArgs:
         with pytest.raises(SystemExit):
             parse_args()
 
+    def test_host_default_localhost(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.host == "127.0.0.1"
+
+    def test_host_custom_value(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--host", "0.0.0.0"])
+        args = parse_args()
+        assert args.host == "0.0.0.0"
+
+    def test_password_default_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping"])
+        args = parse_args()
+        assert args.password is None
+
+    def test_password_custom_value(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["babyping", "--password", "secret"])
+        args = parse_args()
+        assert args.password == "secret"
+
     def test_roi_default_none(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["babyping"])
         args = parse_args()
@@ -608,7 +628,7 @@ class TestStartWebServer:
         from babyping import start_web_server
         from flask import Flask
         app = Flask(__name__)
-        thread = start_web_server(app, 9999)
+        thread = start_web_server(app, "127.0.0.1", 9999)
         assert isinstance(thread, threading.Thread)
         assert thread.daemon is True
 
@@ -616,7 +636,7 @@ class TestStartWebServer:
         from babyping import start_web_server
         from flask import Flask
         app = Flask(__name__)
-        thread = start_web_server(app, 9999)
+        thread = start_web_server(app, "127.0.0.1", 9999)
         assert not thread.is_alive()
 
 
