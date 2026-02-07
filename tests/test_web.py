@@ -15,6 +15,7 @@ class FakeArgs:
     snapshots = False
     snapshot_dir = "~/.babyping/events"
     fps = 10
+    password = None
 
 
 @pytest.fixture
@@ -571,3 +572,59 @@ class TestWebSnapshotPathTraversal:
             resp = c.get("/snapshots/2026-01-01T00-00-00.jpg")
             # 404 because file doesn't exist, but not 400
             assert resp.status_code == 404
+
+
+class TestWebAuth:
+    @pytest.fixture
+    def auth_client(self):
+        args = FakeArgs()
+        args.password = "secret123"
+        app = create_app(args, FrameBuffer())
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c
+
+    def _auth_headers(self, password, username="user"):
+        import base64
+        creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+        return {"Authorization": f"Basic {creds}"}
+
+    def test_no_auth_returns_401(self, auth_client):
+        resp = auth_client.get("/")
+        assert resp.status_code == 401
+        assert "WWW-Authenticate" in resp.headers
+        assert "Basic" in resp.headers["WWW-Authenticate"]
+
+    def test_wrong_password_returns_401(self, auth_client):
+        resp = auth_client.get("/", headers=self._auth_headers("wrongpass"))
+        assert resp.status_code == 401
+
+    def test_correct_password_returns_200(self, auth_client):
+        resp = auth_client.get("/", headers=self._auth_headers("secret123"))
+        assert resp.status_code == 200
+        assert b"BabyPing" in resp.data
+
+    def test_auth_works_on_status_endpoint(self, auth_client):
+        resp = auth_client.get("/status")
+        assert resp.status_code == 401
+        resp = auth_client.get("/status", headers=self._auth_headers("secret123"))
+        assert resp.status_code == 200
+
+    def test_auth_works_on_events_endpoint(self, auth_client):
+        resp = auth_client.get("/events")
+        assert resp.status_code == 401
+        resp = auth_client.get("/events", headers=self._auth_headers("secret123"))
+        assert resp.status_code == 200
+
+    def test_any_username_accepted(self, auth_client):
+        resp = auth_client.get("/", headers=self._auth_headers("secret123", username="anything"))
+        assert resp.status_code == 200
+
+    def test_no_password_no_auth_required(self):
+        args = FakeArgs()
+        args.password = None
+        app = create_app(args, FrameBuffer())
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            resp = c.get("/")
+            assert resp.status_code == 200
